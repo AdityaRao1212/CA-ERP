@@ -1,0 +1,1 @@
+try { const u = require('underscore'); console.log('underscore ok', u.VERSION); const jp = require('jsonpath'); console.log('jsonpath ok'); } catch (e) { console.error('FAILED', e && e.stack ? e.stack : e); process.exit(1); }
