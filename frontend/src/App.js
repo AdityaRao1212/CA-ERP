@@ -21,6 +21,8 @@ import {
   InputLabel,
   FormControl,
   Alert,
+  Chip,
+  Stack,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import SearchIcon from '@mui/icons-material/Search';
@@ -28,28 +30,22 @@ import './App.css';
 import './theme.css';
 import Sidebar from './components/layout/Sidebar';
 import TopBar from './components/layout/TopBar';
-import StatusBadge from './components/shared/StatusBadge';
+import AvatarCircle from './components/shared/AvatarCircle';
+import PriorityBadge from './components/shared/PriorityBadge';
 
-const categories = [
-  'Human Resources',
-  'Compliance',
-  'Physical & Environmental Security',
-  'Asset Management',
-  'Operations Security',
-  'Incident Management',
-];
+const categories = ['BUG', 'FEATURE', 'SECURITY', 'COMPLIANCE', 'OPERATIONS', 'INFRASTRUCTURE'];
+const priorities = ['URGENT', 'HIGH', 'MEDIUM', 'LOW'];
+const statuses = ['TODO', 'IN_PROGRESS', 'IN_REVIEW', 'DONE', 'CANCELLED'];
+const severities = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
 
-const riskLevels = ['Low', 'Medium', 'High'];
-
-const initialRisk = {
-  category: 'Human Resources',
-  risk_statement: '',
-  identified: '',
-  inherent_risk: 'Medium',
-  residual_risk: 'Medium',
-  acceptable_risk: 'Low',
-  owners: '',
-  due_date: '',
+const initialTicket = {
+  title: '',
+  description: '',
+  category: 'BUG',
+  priority: 'MEDIUM',
+  severity: 'MEDIUM',
+  assignedToId: '',
+  dueDate: '',
 };
 
 const initialLogin = {
@@ -58,19 +54,25 @@ const initialLogin = {
 };
 
 const App = () => {
+  const [activePage, setActivePage] = useState('Tickets');
   const [user, setUser] = useState(null);
   const [token, setToken] = useState(localStorage.getItem('authToken') || '');
   const [loginValues, setLoginValues] = useState(initialLogin);
   const [loginError, setLoginError] = useState('');
-  const [risks, setRisks] = useState([]);
+  const [tickets, setTickets] = useState([]);
+  const [users, setUsers] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [newRisk, setNewRisk] = useState(initialRisk);
+  const [newTicket, setNewTicket] = useState(initialTicket);
   const [alertMessage, setAlertMessage] = useState('');
   const [alertSeverity, setAlertSeverity] = useState('success');
+  const [assigningTicketId, setAssigningTicketId] = useState(null);
+  const [selectedAssignee, setSelectedAssignee] = useState('');
 
-  const canEdit = useMemo(() => user && ['admin', 'editor'].includes(user.role), [user]);
-  const canView = useMemo(() => user && ['admin', 'editor', 'viewer'].includes(user.role), [user]);
+  const canEdit = useMemo(
+    () => user && ['ADMIN', 'MANAGER'].includes(user.role),
+    [user]
+  );
 
   const authHeaders = useMemo(() => {
     const headers = { 'Content-Type': 'application/json' };
@@ -90,7 +92,6 @@ const App = () => {
       setUser(null);
       return;
     }
-
     try {
       const response = await fetch('/auth/me', {
         headers: { Authorization: `Bearer ${authToken}` },
@@ -109,20 +110,33 @@ const App = () => {
     }
   };
 
-  const fetchRisks = useCallback(async () => {
+  const fetchUsers = useCallback(async () => {
+    if (!token) return;
     try {
-      const response = await fetch('/risks', { headers: authHeaders });
+      const response = await fetch('/users', { headers: authHeaders });
       if (!response.ok) {
-        throw new Error('Unable to load risks');
+        throw new Error('Unable to load users');
       }
-      const data = await response.json();
-      setRisks(data);
+      setUsers(await response.json());
     } catch (error) {
-      console.error('Unable to load risks:', error);
-      setAlertSeverity('error');
-      setAlertMessage('Could not retrieve risk register.');
+      console.error('Unable to load users:', error);
     }
-  }, [authHeaders]);
+  }, [authHeaders, token]);
+
+  const fetchTickets = useCallback(async () => {
+    if (!token) return;
+    try {
+      const response = await fetch('/tickets', { headers: authHeaders });
+      if (!response.ok) {
+        throw new Error('Unable to load tickets');
+      }
+      setTickets(await response.json());
+    } catch (error) {
+      console.error('Unable to load tickets:', error);
+      setAlertSeverity('error');
+      setAlertMessage('Could not retrieve tickets.');
+    }
+  }, [authHeaders, token]);
 
   useEffect(() => {
     if (token) {
@@ -131,13 +145,15 @@ const App = () => {
   }, [token]);
 
   useEffect(() => {
-    if (user && canView) {
-      fetchRisks();
+    if (user) {
+      fetchUsers();
+      fetchTickets();
     }
-  }, [user, canView, fetchRisks]);
+  }, [user, fetchUsers, fetchTickets]);
+
   const handleLogin = async () => {
     if (!loginValues.username || !loginValues.password) {
-      setLoginError('Username and password are required.');
+      setLoginError('Email or username and password are required.');
       return;
     }
 
@@ -147,13 +163,11 @@ const App = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(loginValues),
       });
-
       if (!response.ok) {
         const errorData = await response.json();
         setLoginError(errorData.error || 'Login failed.');
         return;
       }
-
       const data = await response.json();
       localStorage.setItem('authToken', data.token);
       setToken(data.token);
@@ -169,68 +183,129 @@ const App = () => {
 
   const handleLogout = async () => {
     try {
-      await fetch('/auth/logout', {
-        method: 'POST',
-        headers: authHeaders,
-      });
+      await fetch('/auth/logout', { method: 'POST', headers: authHeaders });
     } catch (error) {
       console.warn('Logout request failed', error);
     }
     localStorage.removeItem('authToken');
     setToken('');
     setUser(null);
-    setRisks([]);
+    setTickets([]);
+    setUsers([]);
   };
 
+  const handlePageChange = (page) => setActivePage(page);
+
   const handleDialogOpen = () => {
-    setNewRisk(initialRisk);
+    setNewTicket(initialTicket);
     setDialogOpen(true);
   };
 
-  const handleDialogClose = () => {
-    setDialogOpen(false);
+  const handleDialogClose = () => setDialogOpen(false);
+
+  const handleTicketChange = (field) => (event) => {
+    setNewTicket({ ...newTicket, [field]: event.target.value });
   };
 
-  const handleChange = (field) => (event) => {
-    setNewRisk({ ...newRisk, [field]: event.target.value });
-  };
-
-  const handleSaveRisk = async () => {
-    if (!newRisk.risk_statement || !newRisk.owners || !newRisk.due_date) {
+  const handleCreateTicket = async () => {
+    if (!newTicket.title || !newTicket.description || !newTicket.category) {
       setAlertSeverity('warning');
-      setAlertMessage('Please complete all required fields before saving.');
+      setAlertMessage('Title, description, and category are required.');
       return;
     }
 
     try {
-      const response = await fetch('/risks', {
+      const payload = {
+        title: newTicket.title,
+        description: newTicket.description,
+        category: newTicket.category,
+        priority: newTicket.priority,
+        severity: newTicket.severity,
+        assignedToId: newTicket.assignedToId || null,
+        dueDate: newTicket.dueDate || null,
+      };
+      const response = await fetch('/tickets', {
         method: 'POST',
         headers: authHeaders,
-        body: JSON.stringify(newRisk),
+        body: JSON.stringify(payload),
       });
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || 'Unable to save risk.');
+        throw new Error(errorData.error || 'Unable to create ticket.');
       }
       setDialogOpen(false);
       setAlertSeverity('success');
-      setAlertMessage('Risk successfully added.');
-      fetchRisks();
+      setAlertMessage('Ticket created successfully.');
+      fetchTickets();
     } catch (error) {
-      console.error('Unable to save risk:', error);
       setAlertSeverity('error');
       setAlertMessage(error.message);
     }
   };
 
-  const filteredRisks = risks.filter((risk) => {
+  const handleAssign = async (ticketId, assignedToId) => {
+    try {
+      const response = await fetch(`/tickets/${ticketId}/assign`, {
+        method: 'PATCH',
+        headers: authHeaders,
+        body: JSON.stringify({ assignedToId: assignedToId || null }),
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Unable to update assignment.');
+      }
+      setAssigningTicketId(null);
+      setSelectedAssignee('');
+      setAlertSeverity('success');
+      setAlertMessage('Assignment updated.');
+      fetchTickets();
+    } catch (error) {
+      setAlertSeverity('error');
+      setAlertMessage(error.message);
+    }
+  };
+
+  const startAssign = (ticket) => {
+    setAssigningTicketId(ticket.id);
+    setSelectedAssignee(ticket.assignedTo?.id || '');
+  };
+
+  const cancelAssign = () => {
+    setAssigningTicketId(null);
+    setSelectedAssignee('');
+  };
+
+  const filteredTickets = tickets.filter((ticket) => {
     const term = searchTerm.toLowerCase();
     return (
-      risk.category.toLowerCase().includes(term) ||
-      risk.risk_statement.toLowerCase().includes(term) ||
-      risk.owners.toLowerCase().includes(term)
+      ticket.ticketNumber.toLowerCase().includes(term) ||
+      ticket.title.toLowerCase().includes(term) ||
+      ticket.category.toLowerCase().includes(term) ||
+      ticket.assignedTo?.name?.toLowerCase().includes(term)
     );
   });
+
+  const stats = useMemo(() => {
+    const byStatus = statuses.reduce((acc, status) => ({ ...acc, [status]: 0 }), {});
+    const byPriority = priorities.reduce((acc, priority) => ({ ...acc, [priority]: 0 }), {});
+    let overdue = 0;
+    tickets.forEach((ticket) => {
+      byStatus[ticket.status] += 1;
+      byPriority[ticket.priority] += 1;
+      if (ticket.dueDate && ticket.status !== 'DONE' && ticket.status !== 'CANCELLED') {
+        const due = new Date(ticket.dueDate);
+        if (due < new Date()) overdue += 1;
+      }
+    });
+    return {
+      total: tickets.length,
+      open: tickets.filter((ticket) => ['TODO', 'IN_PROGRESS', 'IN_REVIEW'].includes(ticket.status)).length,
+      overdue,
+      done: byStatus.DONE,
+      byStatus,
+      byPriority,
+    };
+  }, [tickets]);
 
   if (!user) {
     return (
@@ -240,11 +315,11 @@ const App = () => {
             GovRisk Login
           </Typography>
           <Typography color="textSecondary" gutterBottom>
-            Sign in to manage risk registers with role-based access control.
+            Sign in with your GovRisk account to manage tickets.
           </Typography>
           {loginError && <Alert severity="error" sx={{ mb: 2 }}>{loginError}</Alert>}
           <TextField
-            label="Username"
+            label="Email or Username"
             value={loginValues.username}
             onChange={handleLoginChange('username')}
             fullWidth
@@ -258,9 +333,9 @@ const App = () => {
             fullWidth
             margin="normal"
           />
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 3 }}>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 3, flexWrap: 'wrap', gap: 2 }}>
             <Typography variant="body2" color="textSecondary">
-              Try admin/admin123, manager/manager123, or viewer/viewer123
+              Demo: alex@govrisk.com / password123
             </Typography>
             <Button variant="contained" size="large" onClick={handleLogin}>
               Sign In
@@ -273,10 +348,9 @@ const App = () => {
 
   return (
     <Box className="appShell">
-      <Sidebar />
-
+      <Sidebar active={activePage} onNavigate={handlePageChange} user={user} />
       <Box className="mainContent">
-        <TopBar title="Incident Management" user={user} onLogout={handleLogout} />
+        <TopBar title={activePage === 'Dashboard' ? 'RBAC Risk Dashboard' : 'Tickets'} user={user} onLogout={handleLogout} />
 
         {alertMessage && (
           <Alert severity={alertSeverity} onClose={() => setAlertMessage('')} sx={{ mb: 3 }}>
@@ -284,186 +358,268 @@ const App = () => {
           </Alert>
         )}
 
-        <Grid container spacing={3} sx={{ mb: 3 }}>
-          <Grid item xs={12} md={4}>
-            <Paper className="statCard" elevation={2}>
-              <Typography variant="subtitle2" color="textSecondary" gutterBottom>
-                Audit Completion
-              </Typography>
-              <Typography variant="h4">87%</Typography>
-              <Typography color="success.main">+12% from Q3</Typography>
-            </Paper>
-          </Grid>
-          <Grid item xs={12} md={4}>
-            <Paper className="statCard" elevation={2}>
-              <Typography variant="subtitle2" color="textSecondary" gutterBottom>
-                Open Findings
-              </Typography>
-              <Typography variant="h4">23</Typography>
-              <Typography color="error.main">8 Critical</Typography>
-            </Paper>
-          </Grid>
-          <Grid item xs={12} md={4}>
-            <Paper className="statCard" elevation={2}>
-              <Typography variant="subtitle2" color="textSecondary" gutterBottom>
-                Compliance Score
-              </Typography>
-              <Typography variant="h4">92%</Typography>
-              <Typography color="success.main">+3% improvement</Typography>
-            </Paper>
-          </Grid>
-        </Grid>
+        {activePage === 'Dashboard' ? (
+          <>
+            <Grid container spacing={3} sx={{ mb: 3 }}>
+              <Grid item xs={12} md={3}>
+                <Paper className="statCard" elevation={2}>
+                  <Typography variant="subtitle2" color="textSecondary" gutterBottom>
+                    Total Tickets
+                  </Typography>
+                  <Typography variant="h4">{stats.total}</Typography>
+                  <Typography color="success.main">{stats.open} open</Typography>
+                </Paper>
+              </Grid>
+              <Grid item xs={12} md={3}>
+                <Paper className="statCard" elevation={2}>
+                  <Typography variant="subtitle2" color="textSecondary" gutterBottom>
+                    Overdue
+                  </Typography>
+                  <Typography variant="h4">{stats.overdue}</Typography>
+                  <Typography color="error.main">Needs attention</Typography>
+                </Paper>
+              </Grid>
+              <Grid item xs={12} md={3}>
+                <Paper className="statCard" elevation={2}>
+                  <Typography variant="subtitle2" color="textSecondary" gutterBottom>
+                    Done
+                  </Typography>
+                  <Typography variant="h4">{stats.done}</Typography>
+                  <Typography color="success.main">Completed</Typography>
+                </Paper>
+              </Grid>
+              <Grid item xs={12} md={3}>
+                <Paper className="statCard" elevation={2}>
+                  <Typography variant="subtitle2" color="textSecondary" gutterBottom>
+                    Team Members
+                  </Typography>
+                  <Typography variant="h4">{users.length}</Typography>
+                  <Typography color="textSecondary">Active workload</Typography>
+                </Paper>
+              </Grid>
+            </Grid>
 
-        <Box className="tableHeader">
-          <TextField
-            variant="outlined"
-            placeholder="Search by category, statement, or owner"
-            fullWidth
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-            InputProps={{ startAdornment: <SearchIcon sx={{ mr: 1, color: '#64748b' }} /> }}
-          />
-          <Button
-            variant="contained"
-            startIcon={<AddIcon />}
-            onClick={handleDialogOpen}
-            disabled={!canEdit}
-          >
-            Add Risk
-          </Button>
-        </Box>
+            <Grid container spacing={3} sx={{ mb: 3 }}>
+              <Grid item xs={12} md={6}>
+                <Paper className="statCard" elevation={2}>
+                  <Typography variant="subtitle2" color="textSecondary" gutterBottom>
+                    Tickets by Status
+                  </Typography>
+                  <Box sx={{ mt: 1, display: 'grid', gap: 1 }}>
+                    {statuses.map((status) => (
+                      <Box key={status} sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <Typography>{status.replace('_', ' ')}</Typography>
+                        <Typography>{stats.byStatus[status] || 0}</Typography>
+                      </Box>
+                    ))}
+                  </Box>
+                </Paper>
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <Paper className="statCard" elevation={2}>
+                  <Typography variant="subtitle2" color="textSecondary" gutterBottom>
+                    Tickets by Priority
+                  </Typography>
+                  <Box sx={{ mt: 1, display: 'grid', gap: 1 }}>
+                    {priorities.map((priority) => (
+                      <Box key={priority} sx={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <Typography>{priority}</Typography>
+                        <Typography>{stats.byPriority[priority] || 0}</Typography>
+                      </Box>
+                    ))}
+                  </Box>
+                </Paper>
+              </Grid>
+            </Grid>
 
-        <TableContainer component={Paper} className="riskTable">
-          <Table>
-            <TableHead>
-              <TableRow>
-                <TableCell>ID</TableCell>
-                <TableCell>CATEGORY</TableCell>
-                <TableCell>RISK STATEMENT</TableCell>
-                <TableCell>IDENTIFIED</TableCell>
-                <TableCell>INHERENT</TableCell>
-                <TableCell>RESIDUAL</TableCell>
-                <TableCell>ACCEPTABLE</TableCell>
-                <TableCell>OWNERS</TableCell>
-                <TableCell>DUE DATE</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {filteredRisks.map((risk) => (
-                <TableRow key={risk.id} hover>
-                  <TableCell>{risk.id}</TableCell>
-                  <TableCell>{risk.category}</TableCell>
-                  <TableCell>{risk.risk_statement}</TableCell>
-                  <TableCell>{risk.identified}</TableCell>
-                  <TableCell><StatusBadge severity={risk.inherent_risk} /></TableCell>
-                  <TableCell><StatusBadge severity={risk.residual_risk} /></TableCell>
-                  <TableCell><StatusBadge severity={risk.acceptable_risk} /></TableCell>
-                  <TableCell>{risk.owners}</TableCell>
-                  <TableCell>{risk.due_date}</TableCell>
-                </TableRow>
+            <Grid container spacing={3} sx={{ mb: 3 }}>
+              {users.map((teamUser) => (
+                <Grid item xs={12} md={4} key={teamUser.id}>
+                  <Paper className="statCard" elevation={2}>
+                    <Stack direction="row" alignItems="center" spacing={2} sx={{ mb: 2 }}>
+                      <AvatarCircle initials={teamUser.initials} avatarColor={teamUser.avatarColor} size="md" />
+                      <Box>
+                        <Typography variant="subtitle1">{teamUser.name}</Typography>
+                        <Typography variant="body2" color="textSecondary">
+                          {teamUser.role} · {teamUser.department}
+                        </Typography>
+                      </Box>
+                    </Stack>
+                    <Typography variant="h6" sx={{ mb: 0.5 }}>
+                      {teamUser.assignedCount || 0} tickets
+                    </Typography>
+                    <Typography variant="body2" color="textSecondary">
+                      Open workload
+                    </Typography>
+                    <Button size="small" sx={{ mt: 2 }} onClick={() => { setActivePage('Tickets'); setSearchTerm(teamUser.name); }}>
+                      View Tickets →
+                    </Button>
+                  </Paper>
+                </Grid>
               ))}
-              {filteredRisks.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={9} align="center">
-                    No risk entries found.
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      </Box>
+            </Grid>
+          </>
+        ) : (
+          <>
+            <Box className="tableHeader">
+              <TextField
+                variant="outlined"
+                placeholder="Search tickets, assignee, or category"
+                fullWidth
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+                InputProps={{ startAdornment: <SearchIcon sx={{ mr: 1, color: '#64748b' }} /> }}
+              />
+              <Button variant="contained" startIcon={<AddIcon />} onClick={handleDialogOpen} disabled={!canEdit}>
+                New Ticket
+              </Button>
+            </Box>
 
-      <Dialog open={dialogOpen} onClose={handleDialogClose} maxWidth="sm" fullWidth>
-        <DialogTitle>Add New Risk</DialogTitle>
-        <DialogContent>
-          <Grid container spacing={2} sx={{ pt: 1 }}>
-            <Grid item xs={12} sm={6}>
-              <FormControl fullWidth>
-                <InputLabel>Category</InputLabel>
-                <Select value={newRisk.category} label="Category" onChange={handleChange('category')}>
-                  {categories.map((category) => (
-                    <MenuItem key={category} value={category}>
-                      {category}
-                    </MenuItem>
+            <TableContainer component={Paper} className="riskTable">
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Ticket</TableCell>
+                    <TableCell>Title</TableCell>
+                    <TableCell>Priority</TableCell>
+                    <TableCell>Status</TableCell>
+                    <TableCell>Assigned</TableCell>
+                    <TableCell>Due</TableCell>
+                    <TableCell align="right">Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {filteredTickets.map((ticket) => (
+                    <TableRow key={ticket.id} hover>
+                      <TableCell>{ticket.ticketNumber}</TableCell>
+                      <TableCell>{ticket.title}</TableCell>
+                      <TableCell><PriorityBadge priority={ticket.priority} /></TableCell>
+                      <TableCell><Chip label={ticket.status.replace('_', ' ')} size="small" /></TableCell>
+                      <TableCell>
+                        {assigningTicketId === ticket.id ? (
+                          <FormControl fullWidth size="small">
+                            <Select value={selectedAssignee} onChange={(e) => setSelectedAssignee(e.target.value)}>
+                              <MenuItem value="">Unassigned</MenuItem>
+                              {users.map((u) => (
+                                <MenuItem key={u.id} value={u.id}>{u.name}</MenuItem>
+                              ))}
+                            </Select>
+                          </FormControl>
+                        ) : ticket.assignedTo ? (
+                          <Stack direction="row" alignItems="center" spacing={1}>
+                            <AvatarCircle initials={ticket.assignedTo.initials} avatarColor={ticket.assignedTo.avatarColor} size="sm" />
+                            <Typography variant="body2">{ticket.assignedTo.name}</Typography>
+                          </Stack>
+                        ) : (
+                          <Chip label="Unassigned" size="small" />
+                        )}
+                      </TableCell>
+                      <TableCell>{ticket.dueDate ? new Date(ticket.dueDate).toLocaleDateString() : 'TBD'}</TableCell>
+                      <TableCell align="right">
+                        {assigningTicketId === ticket.id ? (
+                          <Stack direction="row" spacing={1} justifyContent="flex-end">
+                            <Button size="small" onClick={cancelAssign}>Cancel</Button>
+                            <Button variant="contained" size="small" onClick={() => handleAssign(ticket.id, selectedAssignee)}>
+                              Save
+                            </Button>
+                          </Stack>
+                        ) : (
+                          <Button size="small" variant="outlined" onClick={() => startAssign(ticket)}>
+                            {ticket.assignedTo ? 'Reassign' : 'Assign'}
+                          </Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
                   ))}
-                </Select>
-              </FormControl>
+                  {filteredTickets.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={7} align="center">
+                        No tickets found.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </>
+        )}
+
+        <Dialog open={dialogOpen} onClose={handleDialogClose} maxWidth="sm" fullWidth>
+          <DialogTitle>Create New Ticket</DialogTitle>
+          <DialogContent>
+            <Grid container spacing={2} sx={{ pt: 1 }}>
+              <Grid item xs={12}>
+                <TextField fullWidth label="Title" value={newTicket.title} onChange={handleTicketChange('title')} />
+              </Grid>
+              <Grid item xs={12}>
+                <TextField
+                  fullWidth
+                  multiline
+                  minRows={3}
+                  label="Description"
+                  value={newTicket.description}
+                  onChange={handleTicketChange('description')}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <FormControl fullWidth>
+                  <InputLabel>Category</InputLabel>
+                  <Select value={newTicket.category} label="Category" onChange={handleTicketChange('category')}>
+                    {categories.map((category) => (
+                      <MenuItem key={category} value={category}>{category}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <FormControl fullWidth>
+                  <InputLabel>Priority</InputLabel>
+                  <Select value={newTicket.priority} label="Priority" onChange={handleTicketChange('priority')}>
+                    {priorities.map((priority) => (
+                      <MenuItem key={priority} value={priority}>{priority}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <FormControl fullWidth>
+                  <InputLabel>Severity</InputLabel>
+                  <Select value={newTicket.severity} label="Severity" onChange={handleTicketChange('severity')}>
+                    {severities.map((severity) => (
+                      <MenuItem key={severity} value={severity}>{severity}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField
+                  fullWidth
+                  label="Due Date"
+                  type="date"
+                  value={newTicket.dueDate}
+                  onChange={handleTicketChange('dueDate')}
+                  InputLabelProps={{ shrink: true }}
+                />
+              </Grid>
+              <Grid item xs={12}>
+                <FormControl fullWidth>
+                  <InputLabel>Assign To</InputLabel>
+                  <Select value={newTicket.assignedToId} label="Assign To" onChange={handleTicketChange('assignedToId')}>
+                    <MenuItem value="">Unassigned</MenuItem>
+                    {users.map((u) => (
+                      <MenuItem key={u.id} value={u.id}>{u.name}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
             </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
-                label="Identified"
-                value={newRisk.identified}
-                onChange={handleChange('identified')}
-              />
-            </Grid>
-            <Grid item xs={12}>
-              <TextField
-                fullWidth
-                label="Risk Statement"
-                value={newRisk.risk_statement}
-                onChange={handleChange('risk_statement')}
-              />
-            </Grid>
-            <Grid item xs={12} sm={4}>
-              <FormControl fullWidth>
-                <InputLabel>Inherent Risk</InputLabel>
-                <Select value={newRisk.inherent_risk} label="Inherent Risk" onChange={handleChange('inherent_risk')}>
-                  {riskLevels.map((level) => (
-                    <MenuItem key={level} value={level}>
-                      {level}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            </Grid>
-            <Grid item xs={12} sm={4}>
-              <FormControl fullWidth>
-                <InputLabel>Residual Risk</InputLabel>
-                <Select value={newRisk.residual_risk} label="Residual Risk" onChange={handleChange('residual_risk')}>
-                  {riskLevels.map((level) => (
-                    <MenuItem key={level} value={level}>
-                      {level}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            </Grid>
-            <Grid item xs={12} sm={4}>
-              <FormControl fullWidth>
-                <InputLabel>Acceptable Risk</InputLabel>
-                <Select value={newRisk.acceptable_risk} label="Acceptable Risk" onChange={handleChange('acceptable_risk')}>
-                  {riskLevels.map((level) => (
-                    <MenuItem key={level} value={level}>
-                      {level}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField fullWidth label="Owners" value={newRisk.owners} onChange={handleChange('owners')} />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth
-                label="Due Date"
-                type="date"
-                value={newRisk.due_date}
-                onChange={handleChange('due_date')}
-                InputLabelProps={{ shrink: true }}
-              />
-            </Grid>
-          </Grid>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={handleDialogClose}>Cancel</Button>
-          <Button variant="contained" onClick={handleSaveRisk}>
-            Save
-          </Button>
-        </DialogActions>
-      </Dialog>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={handleDialogClose}>Cancel</Button>
+            <Button variant="contained" onClick={handleCreateTicket}>Create Ticket</Button>
+          </DialogActions>
+        </Dialog>
+      </Box>
     </Box>
   );
 };

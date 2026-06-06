@@ -5,17 +5,16 @@ const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-const dbPath = path.join(__dirname, '..', 'database', 'risks.db');
+const dbPath = path.join(__dirname, '..', 'database', 'tickets.db');
 const sessions = {};
 
-// Optional Prisma support: if DATABASE_URL is set and @prisma/client is installed,
-// `backend/prismaClient.js` will export a PrismaClient instance. This is non-breaking
-// — if Prisma is not available the server continues to use the existing sqlite DB.
 let prisma = null;
 try {
   prisma = require('./prismaClient');
   if (prisma) {
-    prisma.$connect().then(() => console.log('Prisma connected (optional)')).catch((e) => console.warn('Prisma connect failed', e.message));
+    prisma.$connect()
+      .then(() => console.log('Prisma connected (optional)'))
+      .catch((e) => console.warn('Prisma connect failed', e.message));
   }
 } catch (e) {
   console.warn('Prisma loader error:', e.message);
@@ -39,88 +38,176 @@ const db = new sqlite3.Database(dbPath, (err) => {
   console.log('Connected to SQLite database at', dbPath);
 
   db.serialize(() => {
-    db.run(`CREATE TABLE IF NOT EXISTS risks (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      category TEXT NOT NULL,
-      risk_statement TEXT NOT NULL,
-      identified TEXT NOT NULL,
-      inherent_risk TEXT NOT NULL,
-      residual_risk TEXT NOT NULL,
-      acceptable_risk TEXT NOT NULL,
-      owners TEXT NOT NULL,
-      due_date TEXT NOT NULL,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP
-    )`);
-
     db.run(`CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
       username TEXT UNIQUE NOT NULL,
+      email TEXT UNIQUE NOT NULL,
       password TEXT NOT NULL,
-      role TEXT NOT NULL
-    )`, (err) => {
-      if (err) {
-        console.error('Error creating users table:', err.message);
-        return;
-      }
+      role TEXT NOT NULL,
+      department TEXT NOT NULL,
+      avatarColor TEXT NOT NULL,
+      initials TEXT NOT NULL,
+      createdAt TEXT DEFAULT CURRENT_TIMESTAMP
+    )`);
 
-      db.get('SELECT COUNT(*) AS count FROM users', (countErr, row) => {
-        if (countErr) {
-          console.error('Unable to verify initial user count:', countErr.message);
-          return;
-        }
+    db.run(`CREATE TABLE IF NOT EXISTS tickets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ticketNumber TEXT UNIQUE NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      category TEXT NOT NULL,
+      priority TEXT NOT NULL,
+      status TEXT NOT NULL,
+      severity TEXT NOT NULL,
+      assignedToId INTEGER,
+      createdById INTEGER NOT NULL,
+      dueDate TEXT,
+      startedAt TEXT,
+      resolvedAt TEXT,
+      createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
+      updatedAt TEXT DEFAULT CURRENT_TIMESTAMP
+    )`);
 
-        if (row.count === 0) {
-          const seedUsers = db.prepare(`INSERT OR IGNORE INTO users (username, password, role) VALUES (?, ?, ?)`);
-          seedUsers.run('admin', 'admin123', 'admin');
-          seedUsers.run('manager', 'manager123', 'editor');
-          seedUsers.run('viewer', 'viewer123', 'viewer');
-          seedUsers.finalize();
-          console.log('Seeded default users: admin, manager, viewer');
-        }
-      });
-    });
-
-    db.get('SELECT COUNT(*) AS count FROM risks', (countErr, row) => {
-      if (countErr) {
-        console.error('Unable to verify initial risk count:', countErr.message);
-        return;
-      }
-      if (row.count === 0) {
-        const seed = db.prepare(`INSERT INTO risks (category, risk_statement, identified, inherent_risk, residual_risk, acceptable_risk, owners, due_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
-        seed.run('Human Resources', 'Insufficient training may impact employee performance.', '01/04/2022', 'High', 'Medium', 'Low', 'HR Team', '21/10/2022');
-        seed.run('Compliance', 'Develop a data policy that ensures protection of IP as required in privacy laws and regulation.', '01/05/2021', 'High', 'High', 'Medium', 'Compliance Team', '14/10/2022');
-        seed.run('Physical & Environmental Security', 'A policy should be implemented to secure unattended user workstations when away from the office.', '01/01/2020', 'Medium', 'Low', 'Low', 'Security Team', '11/10/2022');
-        seed.run('Asset Management', 'There is a lack of control over configuration management of end user systems including desktops, laptops...', '01/03/2022', 'High', 'High', 'Medium', 'IT Team', '17/10/2022');
-        seed.run('Operations Security', 'A patch management policy and procedure that have not been developed to ensure that assets...', '01/03/2022', 'Medium', 'Medium', 'Low', 'Operations Team', '12/10/2022');
-        seed.run('Operations Security', 'Currently all users possess administrative access on workstations. This should be reviewed.', '01/01/2021', 'High', 'Medium', 'Low', 'Ops Team', '13/10/2022');
-        seed.finalize();
-      }
-    });
-
-    // Notifications table for assignment/alerts
     db.run(`CREATE TABLE IF NOT EXISTS notifications (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       userId INTEGER,
       title TEXT,
       message TEXT,
       type TEXT,
-      entityType TEXT,
-      entityId INTEGER,
+      ticketId INTEGER,
+      ticketNum TEXT,
+      fromUserId INTEGER,
+      fromName TEXT,
       read INTEGER DEFAULT 0,
-      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      createdAt TEXT DEFAULT CURRENT_TIMESTAMP
     )`);
 
-    // Audit logs table
     db.run(`CREATE TABLE IF NOT EXISTS audit_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ticketId INTEGER,
       userId INTEGER,
       action TEXT,
-      entityType TEXT,
-      entityId INTEGER,
-      oldValue TEXT,
-      newValue TEXT,
-      timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+      fromValue TEXT,
+      toValue TEXT,
+      message TEXT,
+      createdAt TEXT DEFAULT CURRENT_TIMESTAMP
     )`);
+
+    db.get('SELECT COUNT(*) AS count FROM users', (countErr, userRow) => {
+      if (countErr) {
+        console.error('Unable to verify user count:', countErr.message);
+        return;
+      }
+      if (userRow.count === 0) {
+        const insert = db.prepare(
+          'INSERT OR IGNORE INTO users (name, username, email, password, role, department, avatarColor, initials) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        );
+        insert.run('Alex Johnson', 'alex', 'alex@govrisk.com', 'password123', 'ADMIN', 'IT Security', '#6366f1', 'AJ');
+        insert.run('Sarah Chen', 'sarah', 'sarah@govrisk.com', 'password123', 'MANAGER', 'Compliance', '#ec4899', 'SC');
+        insert.run('Mike Patel', 'mike', 'mike@govrisk.com', 'password123', 'ANALYST', 'Operations', '#10b981', 'MP');
+        insert.finalize(() => console.log('Seeded GovRisk demo users'));
+      }
+    });
+
+    db.get('SELECT COUNT(*) AS count FROM tickets', (countErr, row) => {
+      if (countErr) {
+        console.error('Unable to verify ticket count:', countErr.message);
+        return;
+      }
+      if (row.count === 0) {
+        db.all('SELECT id, name FROM users', [], (uErr, rows) => {
+          if (uErr) {
+            console.error('Unable to load users for ticket seed:', uErr.message);
+            return;
+          }
+          const ids = {};
+          rows.forEach((user) => {
+            ids[user.name] = user.id;
+          });
+
+          const tickets = [
+            {
+              ticketNumber: 'TKT-001',
+              title: 'Unauthorized VPN access attempt detected',
+              description: 'Multiple failed VPN login attempts detected in firewall logs. Investigate and block IP.',
+              category: 'SECURITY',
+              priority: 'URGENT',
+              status: 'IN_PROGRESS',
+              severity: 'CRITICAL',
+              assignedToId: ids['Mike Patel'],
+              createdById: ids['Alex Johnson'],
+              dueDate: new Date(Date.now() + 1 * 86400000).toISOString(),
+            },
+            {
+              ticketNumber: 'TKT-002',
+              title: 'SSL certificate expiry on customer portal',
+              description: 'SSL certificate expires in 5 days. Renew and validate the customer portal certificate.',
+              category: 'INFRASTRUCTURE',
+              priority: 'HIGH',
+              status: 'TODO',
+              severity: 'HIGH',
+              assignedToId: ids['Sarah Chen'],
+              createdById: ids['Alex Johnson'],
+              dueDate: new Date(Date.now() + 5 * 86400000).toISOString(),
+            },
+            {
+              ticketNumber: 'TKT-003',
+              title: 'GDPR data subject request overdue',
+              description: 'Data subject access request is overdue. Legal team needs immediate action.',
+              category: 'COMPLIANCE',
+              priority: 'URGENT',
+              status: 'IN_REVIEW',
+              severity: 'HIGH',
+              assignedToId: ids['Sarah Chen'],
+              createdById: ids['Sarah Chen'],
+              dueDate: new Date(Date.now() - 2 * 86400000).toISOString(),
+            },
+            {
+              ticketNumber: 'TKT-004',
+              title: 'Patch management policy documentation',
+              description: 'Create a formal patch management policy covering OS, applications and network devices.',
+              category: 'COMPLIANCE',
+              priority: 'HIGH',
+              status: 'TODO',
+              severity: 'MEDIUM',
+              assignedToId: ids['Mike Patel'],
+              createdById: ids['Sarah Chen'],
+              dueDate: new Date(Date.now() + 14 * 86400000).toISOString(),
+            },
+            {
+              ticketNumber: 'TKT-005',
+              title: 'Admin access review on all workstations',
+              description: 'Audit local admin rights on workstations and remove unnecessary privileges.',
+              category: 'SECURITY',
+              priority: 'HIGH',
+              status: 'IN_PROGRESS',
+              severity: 'HIGH',
+              assignedToId: ids['Alex Johnson'],
+              createdById: ids['Mike Patel'],
+              dueDate: new Date(Date.now() + 7 * 86400000).toISOString(),
+            },
+          ];
+
+          const insertTicket = db.prepare(`INSERT OR IGNORE INTO tickets (ticketNumber, title, description, category, priority, status, severity, assignedToId, createdById, dueDate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+          tickets.forEach((ticket) => {
+            insertTicket.run(
+              ticket.ticketNumber,
+              ticket.title,
+              ticket.description,
+              ticket.category,
+              ticket.priority,
+              ticket.status,
+              ticket.severity,
+              ticket.assignedToId,
+              ticket.createdById,
+              ticket.dueDate
+            );
+          });
+          insertTicket.finalize(() => console.log('Seeded demo tickets'));
+        });
+      }
+    });
   });
 });
 
@@ -149,25 +236,83 @@ const authorize = (...allowedRoles) => (req, res, next) => {
   next();
 };
 
+const resolveUserId = (payload, callback) => {
+  const { assignedToId, assignedToName, assignedToUsername, assignedToEmail } = payload;
+  if (assignedToId) {
+    return callback(null, Number(assignedToId));
+  }
+
+  const search = assignedToName || assignedToUsername || assignedToEmail;
+  if (!search) {
+    return callback(null, null);
+  }
+
+  db.get(
+    'SELECT id FROM users WHERE name = ? OR username = ? OR email = ?',
+    [search, search, search],
+    (err, row) => {
+      if (err) return callback(err);
+      if (!row) {
+        return callback(new Error('Assigned user not found'));
+      }
+      callback(null, row.id);
+    }
+  );
+};
+
+const fetchTicketDetails = (ticketId, callback) => {
+  db.get(
+    `SELECT t.*,
+      a.id AS assignedToId, a.name AS assignedToName, a.initials AS assignedToInitials, a.avatarColor AS assignedToAvatarColor,
+      c.id AS createdById, c.name AS createdByName, c.initials AS createdByInitials, c.avatarColor AS createdByAvatarColor
+    FROM tickets t
+    LEFT JOIN users a ON t.assignedToId = a.id
+    LEFT JOIN users c ON t.createdById = c.id
+    WHERE t.id = ?`,
+    [ticketId],
+    (err, ticket) => {
+      if (err) return callback(err);
+      if (!ticket) return callback(new Error('Ticket not found after create'));
+      callback(null, {
+        ...ticket,
+        assignedTo: ticket.assignedToId ? {
+          id: ticket.assignedToId,
+          name: ticket.assignedToName,
+          initials: ticket.assignedToInitials,
+          avatarColor: ticket.assignedToAvatarColor,
+        } : null,
+        createdBy: ticket.createdById ? {
+          id: ticket.createdById,
+          name: ticket.createdByName,
+          initials: ticket.createdByInitials,
+          avatarColor: ticket.createdByAvatarColor,
+        } : null,
+      });
+    }
+  );
+};
+
 app.post('/auth/login', (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) {
     return res.status(400).json({ error: 'Username and password are required' });
   }
 
-  db.get('SELECT id, username, role FROM users WHERE username = ? AND password = ?', [username, password], (err, user) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
+  db.get(
+    'SELECT id, name, username, email, role, department, avatarColor, initials FROM users WHERE (username = ? OR email = ?) AND password = ?',
+    [username, username, password],
+    (err, userRow) => {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      if (!userRow) {
+        return res.status(401).json({ error: 'Invalid credentials' });
+      }
+      const token = makeToken();
+      sessions[token] = { user: userRow, createdAt: Date.now() };
+      res.json({ token, user: userRow });
     }
-    if (!user) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-
-    const token = makeToken();
-    sessions[token] = { user, createdAt: Date.now() };
-
-    res.json({ token, user });
-  });
+  );
 });
 
 app.get('/auth/me', authenticate, (req, res) => {
@@ -180,137 +325,152 @@ app.post('/auth/logout', authenticate, (req, res) => {
   res.json({ success: true });
 });
 
-app.get('/risks', authenticate, authorize('admin', 'editor', 'viewer'), (req, res) => {
-  db.all('SELECT * FROM risks ORDER BY id DESC', [], (err, rows) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
+app.get('/users', authenticate, authorize('ADMIN', 'MANAGER', 'ANALYST'), (req, res) => {
+  db.all(
+    `SELECT u.id, u.name, u.email, u.username, u.role, u.department, u.initials, u.avatarColor,
+            (SELECT COUNT(*) FROM tickets t WHERE t.assignedToId = u.id AND t.status NOT IN ('DONE', 'CANCELLED')) AS assignedCount
+     FROM users u
+     ORDER BY u.name ASC`,
+    [],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json(rows);
     }
-    res.json(rows);
-  });
+  );
 });
 
-app.post('/risks', authenticate, authorize('admin', 'editor'), (req, res) => {
-  const {
-    category,
-    risk_statement,
-    identified,
-    inherent_risk,
-    residual_risk,
-    acceptable_risk,
-    owners,
-    due_date,
-  } = req.body;
-
-  const statement = `INSERT INTO risks (category, risk_statement, identified, inherent_risk, residual_risk, acceptable_risk, owners, due_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
-  const values = [category, risk_statement, identified, inherent_risk, residual_risk, acceptable_risk, owners, due_date];
-
-  db.run(statement, values, function (err) {
-    if (err) {
-      return res.status(500).json({ error: err.message });
+app.get('/tickets', authenticate, authorize('ADMIN', 'MANAGER', 'ANALYST'), (req, res) => {
+  db.all(
+    `SELECT t.*, 
+      a.id AS assignedToId, a.name AS assignedToName, a.initials AS assignedToInitials, a.avatarColor AS assignedToAvatarColor,
+      c.id AS createdById, c.name AS createdByName, c.initials AS createdByInitials, c.avatarColor AS createdByAvatarColor
+    FROM tickets t
+    LEFT JOIN users a ON t.assignedToId = a.id
+    LEFT JOIN users c ON t.createdById = c.id
+    ORDER BY t.id DESC`,
+    [],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json(rows.map((ticket) => ({
+        ...ticket,
+        assignedTo: ticket.assignedToId ? {
+          id: ticket.assignedToId,
+          name: ticket.assignedToName,
+          initials: ticket.assignedToInitials,
+          avatarColor: ticket.assignedToAvatarColor,
+        } : null,
+        createdBy: ticket.createdById ? {
+          id: ticket.createdById,
+          name: ticket.createdByName,
+          initials: ticket.createdByInitials,
+          avatarColor: ticket.createdByAvatarColor,
+        } : null,
+      })));
     }
-    res.status(201).json({ id: this.lastID });
-  });
+  );
 });
 
-app.put('/risks/:id', authenticate, authorize('admin', 'editor'), (req, res) => {
-  const { id } = req.params;
-  const {
-    category,
-    risk_statement,
-    identified,
-    inherent_risk,
-    residual_risk,
-    acceptable_risk,
-    owners,
-    due_date,
-  } = req.body;
+app.post('/tickets', authenticate, authorize('ADMIN', 'MANAGER'), (req, res) => {
+  const { title, description, category, priority, severity, dueDate } = req.body;
+  if (!title || !description || !category) {
+    return res.status(400).json({ error: 'Title, description, and category are required' });
+  }
 
-  const statement = `UPDATE risks SET category = ?, risk_statement = ?, identified = ?, inherent_risk = ?, residual_risk = ?, acceptable_risk = ?, owners = ?, due_date = ? WHERE id = ?`;
-  const values = [category, risk_statement, identified, inherent_risk, residual_risk, acceptable_risk, owners, due_date, id];
-
-  db.run(statement, values, function (err) {
-    if (err) {
-      return res.status(500).json({ error: err.message });
+  resolveUserId(req.body, (resolveErr, assignedId) => {
+    if (resolveErr) {
+      return res.status(400).json({ error: resolveErr.message });
     }
-    res.json({ updated: this.changes });
-  });
-});
 
-// Assignment workflow for risks: validate user, update owner, create notification + audit log
-app.patch('/risks/:id/assign', authenticate, authorize('admin', 'editor'), (req, res) => {
-  const { id } = req.params;
-  const ownerUsername = req.body.ownerUsername || req.body.assignee;
-  if (!ownerUsername) return res.status(400).json({ error: 'ownerUsername or assignee is required' });
-
-  db.get('SELECT id, username, role FROM users WHERE username = ?', [ownerUsername], (uErr, userRow) => {
-    if (uErr) return res.status(500).json({ error: uErr.message });
-    if (!userRow) return res.status(404).json({ error: 'User not found' });
-
-    db.get('SELECT owners FROM risks WHERE id = ?', [id], (rErr, riskRow) => {
-      if (rErr) return res.status(500).json({ error: rErr.message });
-      if (!riskRow) return res.status(404).json({ error: 'Risk not found' });
-
-      const previousOwner = riskRow.owners;
-      const newOwner = userRow.username;
-
-      db.run('UPDATE risks SET owners = ? WHERE id = ?', [newOwner, id], function (updateErr) {
-        if (updateErr) return res.status(500).json({ error: updateErr.message });
-
-        // Create notification for new assignee
-        const title = `New risk assigned: RISK-${id}`;
-        const message = `${newOwner} has been assigned risk ID ${id} by ${req.user.username || req.user.name || 'system'}`;
-        db.run('INSERT INTO notifications (userId, title, message, type, entityType, entityId) VALUES (?, ?, ?, ?, ?, ?)', [userRow.id, title, message, 'assignment', 'risk', id], function (notifErr) {
-          if (notifErr) console.warn('Failed to create notification:', notifErr.message);
-
-          // Create audit log entry
-          const oldValue = JSON.stringify({ owners: previousOwner });
-          const newValue = JSON.stringify({ owners: newOwner });
-          db.run('INSERT INTO audit_logs (userId, action, entityType, entityId, oldValue, newValue) VALUES (?, ?, ?, ?, ?, ?)', [req.user.id || null, 'assigned', 'risk', id, oldValue, newValue], function (auditErr) {
-            if (auditErr) console.warn('Failed to create audit log:', auditErr.message);
-
-            // Return updated risk
-            db.get('SELECT * FROM risks WHERE id = ?', [id], (getErr, updated) => {
-              if (getErr) return res.status(500).json({ error: getErr.message });
-              res.json({ updated });
-            });
+    db.get('SELECT COUNT(*) AS count FROM tickets', (countErr, row) => {
+      if (countErr) return res.status(500).json({ error: countErr.message });
+      const ticketNumber = `TKT-${String(row.count + 1).padStart(3, '0')}`;
+      db.run(
+        'INSERT INTO tickets (ticketNumber, title, description, category, priority, status, severity, assignedToId, createdById, dueDate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [ticketNumber, title, description, category, priority, 'TODO', severity || 'MEDIUM', assignedId || null, req.user.id, dueDate || null],
+        function (err) {
+          if (err) return res.status(500).json({ error: err.message });
+          fetchTicketDetails(this.lastID, (fetchErr, ticket) => {
+            if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+            res.status(201).json(ticket);
           });
-        });
-      });
+        }
+      );
     });
   });
 });
 
-app.get('/users', authenticate, authorize('admin', 'manager', 'editor', 'viewer'), (req, res) => {
-  db.all('SELECT id, username, role FROM users ORDER BY username ASC', [], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
-  });
-});
+app.patch('/tickets/:id/assign', authenticate, authorize('ADMIN', 'MANAGER'), (req, res) => {
+  const { id } = req.params;
+  const assignedToId = req.body.assignedToId || null;
 
-app.get('/notifications', authenticate, (req, res) => {
-  db.all('SELECT * FROM notifications WHERE userId = ? ORDER BY id DESC', [req.user.id], (err, rows) => {
+  db.get('SELECT ticketNumber, assignedToId FROM tickets WHERE id = ?', [id], (err, ticket) => {
     if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
-  });
-});
+    if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
 
-app.get('/audit-logs/:entityType/:entityId', authenticate, (req, res) => {
-  const { entityType, entityId } = req.params;
-  db.all('SELECT * FROM audit_logs WHERE entityType = ? AND entityId = ? ORDER BY id DESC', [entityType, entityId], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json(rows);
-  });
-});
+    const oldAssignedId = ticket.assignedToId;
+    db.run('UPDATE tickets SET assignedToId = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?', [assignedToId, id], function (updateErr) {
+      if (updateErr) return res.status(500).json({ error: updateErr.message });
 
-// Lightweight Prisma test route — returns a small sample if Prisma is available
-app.get('/prisma-test', async (req, res) => {
-  if (!prisma) return res.status(501).json({ error: 'Prisma not configured on this server' });
-  try {
-    const u = await prisma.user.findMany({ take: 1 });
-    return res.json({ ok: true, sampleUser: u[0] || null });
-  } catch (err) {
-    return res.status(500).json({ error: err.message });
-  }
+      const notify = (targetId, type, title, message) => {
+        if (!targetId) return;
+        db.run(
+          'INSERT INTO notifications (userId, title, message, type, ticketId, ticketNum, fromUserId, fromName, read) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)',
+          [targetId, title, message, type, id, ticket.ticketNumber, req.user.id, req.user.name || req.user.username]
+        );
+      };
+
+      if (assignedToId && assignedToId !== oldAssignedId) {
+        notify(
+          assignedToId,
+          'ASSIGNED',
+          `${ticket.ticketNumber} assigned to you`,
+          `${req.user.name || req.user.username} assigned ${ticket.ticketNumber} to you`
+        );
+      }
+      if (oldAssignedId && oldAssignedId !== assignedToId) {
+        notify(
+          oldAssignedId,
+          'REASSIGNED',
+          `${ticket.ticketNumber} reassigned`,
+          `${req.user.name || req.user.username} reassigned ${ticket.ticketNumber}`
+        );
+      }
+
+      db.run(
+        'INSERT INTO audit_logs (ticketId, userId, action, fromValue, toValue, message, createdAt) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
+        [id, req.user.id, 'assigned_to', oldAssignedId ? String(oldAssignedId) : null, assignedToId ? String(assignedToId) : null, `${req.user.name || req.user.username} updated assignment`]
+      );
+
+      db.get(
+        `SELECT t.*, 
+          a.id AS assignedToId, a.name AS assignedToName, a.initials AS assignedToInitials, a.avatarColor AS assignedToAvatarColor,
+          c.id AS createdById, c.name AS createdByName, c.initials AS createdByInitials, c.avatarColor AS createdByAvatarColor
+        FROM tickets t
+        LEFT JOIN users a ON t.assignedToId = a.id
+        LEFT JOIN users c ON t.createdById = c.id
+        WHERE t.id = ?`,
+        [id],
+        (fetchErr, updated) => {
+          if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+          res.json({
+            ...updated,
+            assignedTo: updated.assignedToId ? {
+              id: updated.assignedToId,
+              name: updated.assignedToName,
+              initials: updated.assignedToInitials,
+              avatarColor: updated.assignedToAvatarColor,
+            } : null,
+            createdBy: updated.createdById ? {
+              id: updated.createdById,
+              name: updated.createdByName,
+              initials: updated.createdByInitials,
+              avatarColor: updated.createdByAvatarColor,
+            } : null,
+          });
+        }
+      );
+    });
+  });
 });
 
 app.get('/health', (req, res) => {
