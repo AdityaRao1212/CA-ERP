@@ -1,4 +1,9 @@
 node_modules/
+node20/
+frontend/build/
+database/*.db
 .env
 .env.local
 *.log
+backend/testAssign.js
+package-head.txt
