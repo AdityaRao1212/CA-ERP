@@ -1,0 +1,217 @@
+:root {
+    --sidebar-bg: #0f1f3d;
+    --sidebar-text-muted: #9ca3af;
+    /* gray-400 */
+    --accent-left: #3b82f6;
+    /* blue-indigo */
+    --card-bg: #ffffff;
+    --card-border: #e5e7eb;
+    --card-radius: 1rem;
+    /* rounded-xl */
+    --card-shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 1px 3px rgba(16, 24, 40, 0.06);
+    --btn-primary: #2563eb;
+    --btn-danger: #dc2626;
+    --badge-critical: #dc2626;
+    --badge-high: #f97316;
+    --badge-medium: #f59e0b;
+    --badge-low: #10b981;
+    --badge-closed: #6b7280;
+    --topbar-bg: #ffffff;
+    --page-title: #111827;
+    /* gray-900 */
+}
+
+* {
+    font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;
+}
+
+.appShell {
+    display: flex;
+    min-height: 100vh;
+    background: #fff
+}
+
+.sidebar {
+    width: 260px;
+    background: var(--sidebar-bg);
+    color: #fff;
+    padding: 20px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 16px
+}
+
+.sidebarHeader h6,
+.sidebarHeader p {
+    margin: 0
+}
+
+.sidebarHeader {
+    margin-bottom: 8px
+}
+
+.sidebarHeader .MuiTypography-root {
+    color: var(--card-bg)
+}
+
+.sidebarSection .MuiTypography-subtitle2 {
+    color: var(--sidebar-text-muted)
+}
+
+.sidebarLink {
+    display: block;
+    padding: 10px 12px;
+    border-radius: 8px;
+    color: rgba(255, 255, 255, 0.9);
+    margin-bottom: 6px;
+    cursor: pointer
+}
+
+.sidebarLink:hover {
+    background: rgba(255, 255, 255, 0.03)
+}
+
+.sidebarLink.active {
+    border-left: 4px solid var(--accent-left);
+    padding-left: 8px;
+    background: rgba(59, 130, 246, 0.06)
+}
+
+.mainContent {
+    flex: 1;
+    padding: 24px;
+    background: var(--card-bg)
+}
+
+.topBar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    background: var(--topbar-bg);
+    border-radius: 8px;
+    margin-bottom: 16px;
+    box-shadow: none
+}
+
+.topBar h5 {
+    color: var(--page-title);
+    font-weight: 700
+}
+
+.statCard {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: var(--card-radius);
+    box-shadow: var(--card-shadow);
+    padding: 16px
+}
+
+.tableHeader {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 12px
+}
+
+.riskTable .MuiTableContainer-root {
+    box-shadow: none
+}
+
+.loginShell {
+    height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #f8fafc
+}
+
+.loginCard {
+    width: 420px;
+    padding: 28px;
+    border-radius: 12px
+}
+
+/* Badges */
+.severity-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    font-weight: 600;
+    color: #fff;
+    font-size: 0.8rem
+}
+
+.severity-CRITICAL {
+    background: var(--badge-critical)
+}
+
+.severity-HIGH {
+    background: var(--badge-high)
+}
+
+.severity-MEDIUM {
+    background: var(--badge-medium)
+}
+
+.severity-LOW {
+    background: var(--badge-low)
+}
+
+.severity-CLOSED {
+    background: var(--badge-closed)
+}
+
+/* Status chips */
+.status-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(0, 0, 0, 0.06);
+    background: #fff;
+    font-weight: 600
+}
+
+.status-chip .icon {
+    width: 16px;
+    height: 16px;
+    display: inline-block
+}
+
+/* Buttons */
+.MuiButton-containedPrimary {
+    background: var(--btn-primary)
+}
+
+.MuiButton-containedPrimary:hover {
+    background: #1e40af
+}
+
+.btn-danger {
+    background: var(--btn-danger);
+    color: #fff
+}
+
+.btn-ghost {
+    background: transparent;
+    border: 1px solid var(--card-border)
+}
+
+/* Avatars and role badge */
+.role-badge {
+    padding: 6px 8px;
+    border-radius: 999px;
+    font-weight: 600;
+    background: #eef2ff;
+    color: #1e3a8a
+}
+
+/* Misc */
+.sidebar .MuiDivider-root {
+    border-color: rgba(255, 255, 255, 0.06)
+}

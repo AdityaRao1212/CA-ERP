@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Typography,
@@ -20,14 +20,15 @@ import {
   Select,
   InputLabel,
   FormControl,
-  Chip,
   Alert,
-  Divider,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import SearchIcon from '@mui/icons-material/Search';
-import LogoutIcon from '@mui/icons-material/Logout';
 import './App.css';
+import './theme.css';
+import Sidebar from './components/layout/Sidebar';
+import TopBar from './components/layout/TopBar';
+import StatusBadge from './components/shared/StatusBadge';
 
 const categories = [
   'Human Resources',
@@ -108,19 +109,7 @@ const App = () => {
     }
   };
 
-  useEffect(() => {
-    if (token) {
-      loadSession(token);
-    }
-  }, [token]);
-
-  useEffect(() => {
-    if (user && canView) {
-      fetchRisks();
-    }
-  }, [user, canView]);
-
-  const fetchRisks = async () => {
+  const fetchRisks = useCallback(async () => {
     try {
       const response = await fetch('/risks', { headers: authHeaders });
       if (!response.ok) {
@@ -133,8 +122,19 @@ const App = () => {
       setAlertSeverity('error');
       setAlertMessage('Could not retrieve risk register.');
     }
-  };
+  }, [authHeaders]);
 
+  useEffect(() => {
+    if (token) {
+      loadSession(token);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (user && canView) {
+      fetchRisks();
+    }
+  }, [user, canView, fetchRisks]);
   const handleLogin = async () => {
     if (!loginValues.username || !loginValues.password) {
       setLoginError('Username and password are required.');
@@ -273,51 +273,10 @@ const App = () => {
 
   return (
     <Box className="appShell">
-      <Paper className="sidebar" elevation={4}>
-        <Box className="sidebarHeader">
-          <Typography variant="h6">GovRisk</Typography>
-          <Typography variant="body2" color="text.secondary">
-            RBAC Risk Dashboard
-          </Typography>
-        </Box>
-        <Box className="sidebarSection">
-          <Typography variant="subtitle2" gutterBottom>
-            Main Menu
-          </Typography>
-          {['Dashboard', 'Incident Management', 'Risk Management', 'Change Management', 'Non conformance', 'Corrective Action', 'Opportunity for Improvement'].map((item) => (
-            <Typography key={item} className="sidebarLink">
-              {item}
-            </Typography>
-          ))}
-        </Box>
-        <Divider sx={{ borderColor: 'rgba(255,255,255,0.1)' }} />
-        <Box className="sidebarSection">
-          <Typography variant="subtitle2" gutterBottom>
-            Compliance
-          </Typography>
-          {['Repository', 'List Maker', 'ISO/IEC 9001:2015', 'ISO/IEC 22301:2019', 'ISO/IEC 27001:2013', 'ISO/IEC 27701:2019', 'ISO/IEC 20000:2018', 'ISO/IEC 45001:2018', 'ISO/IEC 14001:2015'].map((item) => (
-            <Typography key={item} className="sidebarLink">
-              {item}
-            </Typography>
-          ))}
-        </Box>
-      </Paper>
+      <Sidebar />
 
       <Box className="mainContent">
-        <Box className="topBar">
-          <Box>
-            <Typography variant="h5" gutterBottom>
-              Incident Management
-            </Typography>
-            <Typography color="textSecondary">Risk Register</Typography>
-          </Box>
-          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
-            <Chip label={`Role: ${user.role}`} color={user.role === 'admin' ? 'primary' : user.role === 'editor' ? 'success' : 'default'} />
-            <Button variant="outlined" startIcon={<LogoutIcon />} onClick={handleLogout}>
-              Logout
-            </Button>
-          </Box>
-        </Box>
+        <TopBar title="Incident Management" user={user} onLogout={handleLogout} />
 
         {alertMessage && (
           <Alert severity={alertSeverity} onClose={() => setAlertMessage('')} sx={{ mb: 3 }}>
@@ -396,9 +355,9 @@ const App = () => {
                   <TableCell>{risk.category}</TableCell>
                   <TableCell>{risk.risk_statement}</TableCell>
                   <TableCell>{risk.identified}</TableCell>
-                  <TableCell>{risk.inherent_risk}</TableCell>
-                  <TableCell>{risk.residual_risk}</TableCell>
-                  <TableCell>{risk.acceptable_risk}</TableCell>
+                  <TableCell><StatusBadge severity={risk.inherent_risk} /></TableCell>
+                  <TableCell><StatusBadge severity={risk.residual_risk} /></TableCell>
+                  <TableCell><StatusBadge severity={risk.acceptable_risk} /></TableCell>
                   <TableCell>{risk.owners}</TableCell>
                   <TableCell>{risk.due_date}</TableCell>
                 </TableRow>

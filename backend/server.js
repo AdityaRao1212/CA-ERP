@@ -8,6 +8,19 @@ const PORT = process.env.PORT || 3001;
 const dbPath = path.join(__dirname, '..', 'database', 'risks.db');
 const sessions = {};
 
+// Optional Prisma support: if DATABASE_URL is set and @prisma/client is installed,
+// `backend/prismaClient.js` will export a PrismaClient instance. This is non-breaking
+// — if Prisma is not available the server continues to use the existing sqlite DB.
+let prisma = null;
+try {
+  prisma = require('./prismaClient');
+  if (prisma) {
+    prisma.$connect().then(() => console.log('Prisma connected (optional)')).catch((e) => console.warn('Prisma connect failed', e.message));
+  }
+} catch (e) {
+  console.warn('Prisma loader error:', e.message);
+}
+
 app.use(express.json());
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
@@ -83,6 +96,31 @@ const db = new sqlite3.Database(dbPath, (err) => {
         seed.finalize();
       }
     });
+
+    // Notifications table for assignment/alerts
+    db.run(`CREATE TABLE IF NOT EXISTS notifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      userId INTEGER,
+      title TEXT,
+      message TEXT,
+      type TEXT,
+      entityType TEXT,
+      entityId INTEGER,
+      read INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )`);
+
+    // Audit logs table
+    db.run(`CREATE TABLE IF NOT EXISTS audit_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      userId INTEGER,
+      action TEXT,
+      entityType TEXT,
+      entityId INTEGER,
+      oldValue TEXT,
+      newValue TEXT,
+      timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+    )`);
   });
 });
 
@@ -196,6 +234,83 @@ app.put('/risks/:id', authenticate, authorize('admin', 'editor'), (req, res) => 
     }
     res.json({ updated: this.changes });
   });
+});
+
+// Assignment workflow for risks: validate user, update owner, create notification + audit log
+app.patch('/risks/:id/assign', authenticate, authorize('admin', 'editor'), (req, res) => {
+  const { id } = req.params;
+  const ownerUsername = req.body.ownerUsername || req.body.assignee;
+  if (!ownerUsername) return res.status(400).json({ error: 'ownerUsername or assignee is required' });
+
+  db.get('SELECT id, username, role FROM users WHERE username = ?', [ownerUsername], (uErr, userRow) => {
+    if (uErr) return res.status(500).json({ error: uErr.message });
+    if (!userRow) return res.status(404).json({ error: 'User not found' });
+
+    db.get('SELECT owners FROM risks WHERE id = ?', [id], (rErr, riskRow) => {
+      if (rErr) return res.status(500).json({ error: rErr.message });
+      if (!riskRow) return res.status(404).json({ error: 'Risk not found' });
+
+      const previousOwner = riskRow.owners;
+      const newOwner = userRow.username;
+
+      db.run('UPDATE risks SET owners = ? WHERE id = ?', [newOwner, id], function (updateErr) {
+        if (updateErr) return res.status(500).json({ error: updateErr.message });
+
+        // Create notification for new assignee
+        const title = `New risk assigned: RISK-${id}`;
+        const message = `${newOwner} has been assigned risk ID ${id} by ${req.user.username || req.user.name || 'system'}`;
+        db.run('INSERT INTO notifications (userId, title, message, type, entityType, entityId) VALUES (?, ?, ?, ?, ?, ?)', [userRow.id, title, message, 'assignment', 'risk', id], function (notifErr) {
+          if (notifErr) console.warn('Failed to create notification:', notifErr.message);
+
+          // Create audit log entry
+          const oldValue = JSON.stringify({ owners: previousOwner });
+          const newValue = JSON.stringify({ owners: newOwner });
+          db.run('INSERT INTO audit_logs (userId, action, entityType, entityId, oldValue, newValue) VALUES (?, ?, ?, ?, ?, ?)', [req.user.id || null, 'assigned', 'risk', id, oldValue, newValue], function (auditErr) {
+            if (auditErr) console.warn('Failed to create audit log:', auditErr.message);
+
+            // Return updated risk
+            db.get('SELECT * FROM risks WHERE id = ?', [id], (getErr, updated) => {
+              if (getErr) return res.status(500).json({ error: getErr.message });
+              res.json({ updated });
+            });
+          });
+        });
+      });
+    });
+  });
+});
+
+app.get('/users', authenticate, authorize('admin', 'manager', 'editor', 'viewer'), (req, res) => {
+  db.all('SELECT id, username, role FROM users ORDER BY username ASC', [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
+app.get('/notifications', authenticate, (req, res) => {
+  db.all('SELECT * FROM notifications WHERE userId = ? ORDER BY id DESC', [req.user.id], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
+app.get('/audit-logs/:entityType/:entityId', authenticate, (req, res) => {
+  const { entityType, entityId } = req.params;
+  db.all('SELECT * FROM audit_logs WHERE entityType = ? AND entityId = ? ORDER BY id DESC', [entityType, entityId], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
+// Lightweight Prisma test route — returns a small sample if Prisma is available
+app.get('/prisma-test', async (req, res) => {
+  if (!prisma) return res.status(501).json({ error: 'Prisma not configured on this server' });
+  try {
+    const u = await prisma.user.findMany({ take: 1 });
+    return res.json({ ok: true, sampleUser: u[0] || null });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/health', (req, res) => {
