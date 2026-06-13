@@ -6,11 +6,11 @@ async function main() {
   console.log('Seeding database...');
 
   const users = [
-    { name: 'Alex Johnson', email: 'admin@govrisk.com', role: 'ADMIN', department: 'IT', passwordHash: 'password' },
-    { name: 'Sarah Chen', email: 'manager@govrisk.com', role: 'MANAGER', department: 'Compliance', passwordHash: 'password' },
-    { name: 'Mike Patel', email: 'analyst@govrisk.com', role: 'ANALYST', department: 'Operations', passwordHash: 'password' },
-    { name: 'Emma Davis', email: 'viewer@govrisk.com', role: 'VIEWER', department: 'HR', passwordHash: 'password' },
-    { name: 'James Wilson', email: 'ops@govrisk.com', role: 'ANALYST', department: 'Operations', passwordHash: 'password' },
+    { name: 'Alex Johnson', email: 'admin@ca-erp.com', role: 'ADMIN', department: 'IT', passwordHash: 'password' },
+    { name: 'Sarah Chen', email: 'manager@ca-erp.com', role: 'MANAGER', department: 'Compliance', passwordHash: 'password' },
+    { name: 'Mike Patel', email: 'analyst@ca-erp.com', role: 'ANALYST', department: 'Operations', passwordHash: 'password' },
+    { name: 'Emma Davis', email: 'viewer@ca-erp.com', role: 'VIEWER', department: 'HR', passwordHash: 'password' },
+    { name: 'James Wilson', email: 'ops@ca-erp.com', role: 'ANALYST', department: 'Operations', passwordHash: 'password' },
   ];
 
   for (const u of users) {
@@ -22,7 +22,7 @@ async function main() {
   }
 
   // Create a few sample incidents and risks (minimal fields)
-  const admin = await prisma.user.findUnique({ where: { email: 'admin@govrisk.com' } });
+  const admin = await prisma.user.findUnique({ where: { email: 'admin@ca-erp.com' } });
   if (!admin) throw new Error('Admin user missing');
 
   await prisma.incident.upsert({

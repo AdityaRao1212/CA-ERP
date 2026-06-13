@@ -7,7 +7,7 @@ const TopBar = ({ title = '', user = null, onLogout = () => { } }) => {
         <Box className="topBar">
             <Box>
                 <Typography variant="h5" gutterBottom>{title}</Typography>
-                <Typography color="textSecondary">GovRisk Ticketing</Typography>
+                <Typography color="textSecondary">CA-ERP System Ticketing</Typography>
             </Box>
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
                 {user && <Chip label={`Role: ${user.role || user}`} className="role-badge" />}

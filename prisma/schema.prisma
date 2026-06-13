@@ -18,10 +18,10 @@ model User {
   avatarColor  String
   initials     String
   createdAt    DateTime       @default(now())
-  assignedTickets Ticket[]     @relation("AssignedTo")
-  createdTickets  Ticket[]     @relation("CreatedBy")
-  notifications Notification[]
-  auditLogs    AuditLog[]
+  assignedTickets Ticket[]      @relation("AssignedTo")
+  createdTickets  Ticket[]      @relation("CreatedBy")
+  notifications   Notification[]
+  auditLogs       AuditLog[]
 }
 
 model Ticket {
@@ -33,11 +33,15 @@ model Ticket {
   priority     Priority
   status       TicketStatus  @default(TODO)
   severity     Severity
+  project      String?
   assignedToId Int?
   assignedTo   User?         @relation("AssignedTo", fields: [assignedToId], references: [id])
   createdById  Int
   createdBy    User          @relation("CreatedBy", fields: [createdById], references: [id])
   dueDate      DateTime?
+  assignmentPdfName String?
+  assignmentPdfType String?
+  assignmentPdfData String?
   startedAt    DateTime?
   resolvedAt   DateTime?
   createdAt    DateTime      @default(now())

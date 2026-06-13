@@ -36,14 +36,15 @@ import PriorityBadge from './components/shared/PriorityBadge';
 const categories = ['BUG', 'FEATURE', 'SECURITY', 'COMPLIANCE', 'OPERATIONS', 'INFRASTRUCTURE'];
 const priorities = ['URGENT', 'HIGH', 'MEDIUM', 'LOW'];
 const statuses = ['TODO', 'IN_PROGRESS', 'IN_REVIEW', 'DONE', 'CANCELLED'];
-const severities = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
+const projectNames = ['HDFC', 'ICICI', 'SBI', 'Axis'];
+const projectFilters = ['All Projects', ...projectNames];
 
 const initialTicket = {
   title: '',
   description: '',
   category: 'BUG',
   priority: 'MEDIUM',
-  severity: 'MEDIUM',
+  project: projectNames[0],
   assignedToId: '',
   dueDate: '',
 };
@@ -62,8 +63,10 @@ const App = () => {
   const [tickets, setTickets] = useState([]);
   const [users, setUsers] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [selectedProject, setSelectedProject] = useState('All Projects');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [newTicket, setNewTicket] = useState(initialTicket);
+  const [ticketAttachment, setTicketAttachment] = useState(null);
   const [alertMessage, setAlertMessage] = useState('');
   const [alertSeverity, setAlertSeverity] = useState('success');
   const [assigningTicketId, setAssigningTicketId] = useState(null);
@@ -198,13 +201,45 @@ const App = () => {
 
   const handleDialogOpen = () => {
     setNewTicket(initialTicket);
+    setTicketAttachment(null);
     setDialogOpen(true);
   };
 
-  const handleDialogClose = () => setDialogOpen(false);
+  const handleDialogClose = () => {
+    setDialogOpen(false);
+    setTicketAttachment(null);
+  };
 
   const handleTicketChange = (field) => (event) => {
     setNewTicket({ ...newTicket, [field]: event.target.value });
+  };
+
+  const handleTicketAttachmentChange = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      setTicketAttachment(null);
+      return;
+    }
+
+    if (file.type !== 'application/pdf') {
+      setAlertSeverity('warning');
+      setAlertMessage('Only PDF attachments are supported for ticket creation.');
+      event.target.value = '';
+      return;
+    }
+
+    const attachmentData = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error('Unable to read PDF attachment.'));
+      reader.readAsDataURL(file);
+    });
+
+    setTicketAttachment({
+      name: file.name,
+      type: file.type,
+      data: attachmentData,
+    });
   };
 
   const handleCreateTicket = async () => {
@@ -220,9 +255,10 @@ const App = () => {
         description: newTicket.description,
         category: newTicket.category,
         priority: newTicket.priority,
-        severity: newTicket.severity,
+        project: newTicket.project,
         assignedToId: newTicket.assignedToId || null,
         dueDate: newTicket.dueDate || null,
+        attachment: ticketAttachment,
       };
       const response = await fetch('/tickets', {
         method: 'POST',
@@ -234,6 +270,7 @@ const App = () => {
         throw new Error(errorData.error || 'Unable to create ticket.');
       }
       setDialogOpen(false);
+      setTicketAttachment(null);
       setAlertSeverity('success');
       setAlertMessage('Ticket created successfully.');
       fetchTickets();
@@ -275,12 +312,20 @@ const App = () => {
     setSelectedAssignee('');
   };
 
-  const filteredTickets = tickets.filter((ticket) => {
+  const scopedTickets = useMemo(() => {
+    if (selectedProject === 'All Projects') {
+      return tickets;
+    }
+    return tickets.filter((ticket) => ticket.project === selectedProject);
+  }, [tickets, selectedProject]);
+
+  const filteredTickets = scopedTickets.filter((ticket) => {
     const term = searchTerm.toLowerCase();
     return (
       ticket.ticketNumber.toLowerCase().includes(term) ||
       ticket.title.toLowerCase().includes(term) ||
       ticket.category.toLowerCase().includes(term) ||
+      ticket.project?.toLowerCase().includes(term) ||
       ticket.assignedTo?.name?.toLowerCase().includes(term)
     );
   });
@@ -289,7 +334,7 @@ const App = () => {
     const byStatus = statuses.reduce((acc, status) => ({ ...acc, [status]: 0 }), {});
     const byPriority = priorities.reduce((acc, priority) => ({ ...acc, [priority]: 0 }), {});
     let overdue = 0;
-    tickets.forEach((ticket) => {
+    scopedTickets.forEach((ticket) => {
       byStatus[ticket.status] += 1;
       byPriority[ticket.priority] += 1;
       if (ticket.dueDate && ticket.status !== 'DONE' && ticket.status !== 'CANCELLED') {
@@ -298,24 +343,29 @@ const App = () => {
       }
     });
     return {
-      total: tickets.length,
-      open: tickets.filter((ticket) => ['TODO', 'IN_PROGRESS', 'IN_REVIEW'].includes(ticket.status)).length,
+      total: scopedTickets.length,
+      open: scopedTickets.filter((ticket) => ['TODO', 'IN_PROGRESS', 'IN_REVIEW'].includes(ticket.status)).length,
       overdue,
       done: byStatus.DONE,
       byStatus,
       byPriority,
     };
-  }, [tickets]);
+  }, [scopedTickets]);
+
+  const projectCounts = useMemo(() => projectNames.map((project) => ({
+    name: project,
+    count: tickets.filter((ticket) => ticket.project === project).length,
+  })), [tickets]);
 
   if (!user) {
     return (
       <Box className="loginShell">
         <Paper className="loginCard" elevation={8}>
           <Typography variant="h4" gutterBottom>
-            GovRisk Login
+            CA-ERP System Login
           </Typography>
           <Typography color="textSecondary" gutterBottom>
-            Sign in with your GovRisk account to manage tickets.
+            Sign in with your CA-ERP account to manage tickets.
           </Typography>
           {loginError && <Alert severity="error" sx={{ mb: 2 }}>{loginError}</Alert>}
           <TextField
@@ -335,7 +385,7 @@ const App = () => {
           />
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 3, flexWrap: 'wrap', gap: 2 }}>
             <Typography variant="body2" color="textSecondary">
-              Demo: alex@govrisk.com / password123
+              Demo: alex@ca-erp.com / password123
             </Typography>
             <Button variant="contained" size="large" onClick={handleLogin}>
               Sign In
@@ -348,9 +398,16 @@ const App = () => {
 
   return (
     <Box className="appShell">
-      <Sidebar active={activePage} onNavigate={handlePageChange} user={user} />
+      <Sidebar
+        active={activePage}
+        onNavigate={handlePageChange}
+        user={user}
+        selectedProject={selectedProject}
+        onProjectChange={setSelectedProject}
+        projectCounts={projectCounts}
+      />
       <Box className="mainContent">
-        <TopBar title={activePage === 'Dashboard' ? 'RBAC Risk Dashboard' : 'Tickets'} user={user} onLogout={handleLogout} />
+        <TopBar title={activePage === 'Dashboard' ? 'CA-ERP System Dashboard' : 'Tickets'} user={user} onLogout={handleLogout} />
 
         {alertMessage && (
           <Alert severity={alertSeverity} onClose={() => setAlertMessage('')} sx={{ mb: 3 }}>
@@ -398,6 +455,20 @@ const App = () => {
                 </Paper>
               </Grid>
             </Grid>
+
+            <Paper className="projectScopeCard" elevation={0} sx={{ mb: 3 }}>
+              <Box>
+                <Typography variant="overline" color="textSecondary">
+                  Project Scope
+                </Typography>
+                <Typography variant="h6">
+                  {selectedProject === 'All Projects' ? 'All companies' : selectedProject}
+                </Typography>
+              </Box>
+              <Typography variant="body2" color="textSecondary">
+                Use the project folder in the left rail to isolate tickets by company.
+              </Typography>
+            </Paper>
 
             <Grid container spacing={3} sx={{ mb: 3 }}>
               <Grid item xs={12} md={6}>
@@ -462,6 +533,18 @@ const App = () => {
         ) : (
           <>
             <Box className="tableHeader">
+              <FormControl sx={{ minWidth: 180 }} size="small">
+                <InputLabel>Project</InputLabel>
+                <Select
+                  value={selectedProject}
+                  label="Project"
+                  onChange={(event) => setSelectedProject(event.target.value)}
+                >
+                  {projectFilters.map((project) => (
+                    <MenuItem key={project} value={project}>{project}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
               <TextField
                 variant="outlined"
                 placeholder="Search tickets, assignee, or category"
@@ -481,8 +564,10 @@ const App = () => {
                   <TableRow>
                     <TableCell>Ticket</TableCell>
                     <TableCell>Title</TableCell>
+                    <TableCell>Project</TableCell>
                     <TableCell>Priority</TableCell>
                     <TableCell>Status</TableCell>
+                    <TableCell>PDF</TableCell>
                     <TableCell>Assigned</TableCell>
                     <TableCell>Due</TableCell>
                     <TableCell align="right">Actions</TableCell>
@@ -493,8 +578,24 @@ const App = () => {
                     <TableRow key={ticket.id} hover>
                       <TableCell>{ticket.ticketNumber}</TableCell>
                       <TableCell>{ticket.title}</TableCell>
+                      <TableCell>{ticket.project || 'Unassigned'}</TableCell>
                       <TableCell><PriorityBadge priority={ticket.priority} /></TableCell>
                       <TableCell><Chip label={ticket.status.replace('_', ' ')} size="small" /></TableCell>
+                      <TableCell>
+                        {ticket.assignmentPdfData ? (
+                          <Button
+                            size="small"
+                            variant="text"
+                            component="a"
+                            href={ticket.assignmentPdfData}
+                            download={ticket.assignmentPdfName || `${ticket.ticketNumber}.pdf`}
+                          >
+                            View PDF
+                          </Button>
+                        ) : (
+                          <Chip label="None" size="small" variant="outlined" />
+                        )}
+                      </TableCell>
                       <TableCell>
                         {assigningTicketId === ticket.id ? (
                           <FormControl fullWidth size="small">
@@ -583,10 +684,10 @@ const App = () => {
               </Grid>
               <Grid item xs={12} sm={6}>
                 <FormControl fullWidth>
-                  <InputLabel>Severity</InputLabel>
-                  <Select value={newTicket.severity} label="Severity" onChange={handleTicketChange('severity')}>
-                    {severities.map((severity) => (
-                      <MenuItem key={severity} value={severity}>{severity}</MenuItem>
+                  <InputLabel>Project</InputLabel>
+                  <Select value={newTicket.project} label="Project" onChange={handleTicketChange('project')}>
+                    {projectNames.map((project) => (
+                      <MenuItem key={project} value={project}>{project}</MenuItem>
                     ))}
                   </Select>
                 </FormControl>
@@ -611,6 +712,15 @@ const App = () => {
                     ))}
                   </Select>
                 </FormControl>
+              </Grid>
+              <Grid item xs={12}>
+                <Button variant="outlined" component="label" fullWidth>
+                  {ticketAttachment ? ticketAttachment.name : 'Upload PDF Attachment'}
+                  <input hidden type="file" accept="application/pdf" onChange={handleTicketAttachmentChange} />
+                </Button>
+                <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 1 }}>
+                  Attach a PDF to keep the supporting document with the ticket.
+                </Typography>
               </Grid>
             </Grid>
           </DialogContent>

@@ -1,45 +1,51 @@
 :root {
-    --sidebar-bg: #0f1f3d;
+    --sidebar-bg: linear-gradient(180deg, #081427 0%, #0d2341 60%, #102b52 100%);
     --sidebar-text-muted: #9ca3af;
-    /* gray-400 */
-    --accent-left: #3b82f6;
-    /* blue-indigo */
+    --accent-left: #38bdf8;
     --card-bg: #ffffff;
-    --card-border: #e5e7eb;
+    --card-border: #dbe3ef;
     --card-radius: 1rem;
-    /* rounded-xl */
-    --card-shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 1px 3px rgba(16, 24, 40, 0.06);
-    --btn-primary: #2563eb;
+    --card-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+    --btn-primary: #1d4ed8;
     --btn-danger: #dc2626;
     --badge-critical: #dc2626;
     --badge-high: #f97316;
     --badge-medium: #f59e0b;
     --badge-low: #10b981;
     --badge-closed: #6b7280;
-    --topbar-bg: #ffffff;
-    --page-title: #111827;
-    /* gray-900 */
+    --topbar-bg: rgba(255, 255, 255, 0.92);
+    --page-title: #0f172a;
 }
 
 * {
-    font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;
+    font-family: 'Inter', 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+body {
+    margin: 0;
+    background:
+        radial-gradient(circle at top left, rgba(56, 189, 248, 0.12), transparent 24%),
+        radial-gradient(circle at top right, rgba(29, 78, 216, 0.10), transparent 28%),
+        #eef4fb;
+    color: #0f172a;
 }
 
 .appShell {
     display: flex;
     min-height: 100vh;
-    background: #fff
+    background: transparent;
 }
 
 .sidebar {
-    width: 260px;
+    width: 280px;
     background: var(--sidebar-bg);
     color: #fff;
-    padding: 20px;
+    padding: 24px 20px;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
-    gap: 16px
+    gap: 18px;
+    box-shadow: 12px 0 30px rgba(2, 6, 23, 0.18);
 }
 
 .sidebarHeader h6,
@@ -62,37 +68,40 @@
 .sidebarLink {
     display: block;
     padding: 10px 12px;
-    border-radius: 8px;
+    border-radius: 10px;
     color: rgba(255, 255, 255, 0.9);
     margin-bottom: 6px;
-    cursor: pointer
+    cursor: pointer;
+    transition: transform 0.18s ease, background 0.18s ease, color 0.18s ease;
 }
 
 .sidebarLink:hover {
-    background: rgba(255, 255, 255, 0.03)
+    background: rgba(255, 255, 255, 0.05);
+    transform: translateX(2px)
 }
 
 .sidebarLink.active {
     border-left: 4px solid var(--accent-left);
     padding-left: 8px;
-    background: rgba(59, 130, 246, 0.06)
+    background: rgba(56, 189, 248, 0.12)
 }
 
 .mainContent {
     flex: 1;
-    padding: 24px;
-    background: var(--card-bg)
+    padding: 28px;
+    background: transparent;
 }
 
 .topBar {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 12px 16px;
+    padding: 14px 18px;
     background: var(--topbar-bg);
-    border-radius: 8px;
-    margin-bottom: 16px;
-    box-shadow: none
+    border-radius: 18px;
+    margin-bottom: 18px;
+    box-shadow: var(--card-shadow);
+    backdrop-filter: blur(14px)
 }
 
 .topBar h5 {
@@ -112,25 +121,99 @@
     display: flex;
     gap: 12px;
     align-items: center;
-    margin-bottom: 12px
+    margin-bottom: 12px;
+    flex-wrap: wrap
 }
 
 .riskTable .MuiTableContainer-root {
     box-shadow: none
 }
 
+.projectScopeCard {
+    padding: 16px 18px;
+    border: 1px solid var(--card-border);
+    border-radius: 18px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(240, 247, 255, 0.92));
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    box-shadow: var(--card-shadow)
+}
+
+.projectFolder {
+    padding: 16px 14px;
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.08)
+}
+
+.projectFolderHeader {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    cursor: pointer;
+    user-select: none;
+    padding-bottom: 8px;
+}
+
+.projectFolderHeader:hover {
+    opacity: 0.96;
+}
+
+.projectFolderList {
+    display: grid;
+    gap: 8px;
+}
+
+.projectFolderItem {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    color: rgba(255, 255, 255, 0.92);
+    cursor: pointer;
+    background: rgba(255, 255, 255, 0.02);
+    transition: background 0.18s ease, transform 0.18s ease;
+}
+
+.projectFolderItem:hover {
+    background: rgba(255, 255, 255, 0.08);
+    transform: translateX(2px)
+}
+
+.projectFolderItem.active {
+    background: rgba(56, 189, 248, 0.16);
+    border: 1px solid rgba(56, 189, 248, 0.3)
+}
+
+.projectCountChip {
+    height: 22px;
+    color: #0f172a !important;
+    background: rgba(255, 255, 255, 0.88) !important;
+    font-weight: 700 !important;
+}
+
 .loginShell {
-    height: 100vh;
+    min-height: 100vh;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: #f8fafc
+    background:
+        radial-gradient(circle at top left, rgba(56, 189, 248, 0.16), transparent 28%),
+        radial-gradient(circle at bottom right, rgba(29, 78, 216, 0.14), transparent 30%),
+        #f6f9fd;
 }
 
 .loginCard {
-    width: 420px;
-    padding: 28px;
-    border-radius: 12px
+    width: 100%;
+    max-width: 460px;
+    padding: 32px;
+    border-radius: 22px;
+    box-shadow: var(--card-shadow)
 }
 
 /* Badges */
@@ -211,7 +294,34 @@
     color: #1e3a8a
 }
 
+.MuiTableHead-root .MuiTableCell-root {
+    font-weight: 700;
+    background: #f8fbff;
+}
+
+.MuiTableBody-root .MuiTableRow-root:hover {
+    background: rgba(15, 23, 42, 0.03)
+}
+
 /* Misc */
 .sidebar .MuiDivider-root {
     border-color: rgba(255, 255, 255, 0.06)
+}
+
+@media (max-width: 950px) {
+    .appShell {
+        flex-direction: column;
+    }
+
+    .sidebar {
+        width: 100%;
+    }
+}
+
+@media (max-width: 680px) {
+    .topBar,
+    .projectScopeCard {
+        flex-direction: column;
+        align-items: stretch;
+    }
 }

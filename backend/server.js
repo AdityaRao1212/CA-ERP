@@ -60,14 +60,39 @@ const db = new sqlite3.Database(dbPath, (err) => {
       priority TEXT NOT NULL,
       status TEXT NOT NULL,
       severity TEXT NOT NULL,
+      project TEXT,
       assignedToId INTEGER,
       createdById INTEGER NOT NULL,
       dueDate TEXT,
+      assignmentPdfName TEXT,
+      assignmentPdfType TEXT,
+      assignmentPdfData TEXT,
       startedAt TEXT,
       resolvedAt TEXT,
       createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
       updatedAt TEXT DEFAULT CURRENT_TIMESTAMP
     )`);
+
+    db.run('ALTER TABLE tickets ADD COLUMN project TEXT', (alterErr) => {
+      if (alterErr && !/duplicate column name/i.test(alterErr.message)) {
+        console.warn('Unable to add tickets.project column:', alterErr.message);
+      }
+    });
+    db.run('ALTER TABLE tickets ADD COLUMN assignmentPdfName TEXT', (alterErr) => {
+      if (alterErr && !/duplicate column name/i.test(alterErr.message)) {
+        console.warn('Unable to add tickets.assignmentPdfName column:', alterErr.message);
+      }
+    });
+    db.run('ALTER TABLE tickets ADD COLUMN assignmentPdfType TEXT', (alterErr) => {
+      if (alterErr && !/duplicate column name/i.test(alterErr.message)) {
+        console.warn('Unable to add tickets.assignmentPdfType column:', alterErr.message);
+      }
+    });
+    db.run('ALTER TABLE tickets ADD COLUMN assignmentPdfData TEXT', (alterErr) => {
+      if (alterErr && !/duplicate column name/i.test(alterErr.message)) {
+        console.warn('Unable to add tickets.assignmentPdfData column:', alterErr.message);
+      }
+    });
 
     db.run(`CREATE TABLE IF NOT EXISTS notifications (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -103,10 +128,10 @@ const db = new sqlite3.Database(dbPath, (err) => {
         const insert = db.prepare(
           'INSERT OR IGNORE INTO users (name, username, email, password, role, department, avatarColor, initials) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
         );
-        insert.run('Alex Johnson', 'alex', 'alex@govrisk.com', 'password123', 'ADMIN', 'IT Security', '#6366f1', 'AJ');
-        insert.run('Sarah Chen', 'sarah', 'sarah@govrisk.com', 'password123', 'MANAGER', 'Compliance', '#ec4899', 'SC');
-        insert.run('Mike Patel', 'mike', 'mike@govrisk.com', 'password123', 'ANALYST', 'Operations', '#10b981', 'MP');
-        insert.finalize(() => console.log('Seeded GovRisk demo users'));
+        insert.run('Alex Johnson', 'alex', 'alex@ca-erp.com', 'password123', 'ADMIN', 'IT Security', '#6366f1', 'AJ');
+        insert.run('Sarah Chen', 'sarah', 'sarah@ca-erp.com', 'password123', 'MANAGER', 'Compliance', '#ec4899', 'SC');
+        insert.run('Mike Patel', 'mike', 'mike@ca-erp.com', 'password123', 'ANALYST', 'Operations', '#10b981', 'MP');
+        insert.finalize(() => console.log('Seeded CA-ERP System demo users'));
       }
     });
 
@@ -135,6 +160,7 @@ const db = new sqlite3.Database(dbPath, (err) => {
               priority: 'URGENT',
               status: 'IN_PROGRESS',
               severity: 'CRITICAL',
+              project: 'HDFC',
               assignedToId: ids['Mike Patel'],
               createdById: ids['Alex Johnson'],
               dueDate: new Date(Date.now() + 1 * 86400000).toISOString(),
@@ -147,6 +173,7 @@ const db = new sqlite3.Database(dbPath, (err) => {
               priority: 'HIGH',
               status: 'TODO',
               severity: 'HIGH',
+              project: 'ICICI',
               assignedToId: ids['Sarah Chen'],
               createdById: ids['Alex Johnson'],
               dueDate: new Date(Date.now() + 5 * 86400000).toISOString(),
@@ -159,6 +186,7 @@ const db = new sqlite3.Database(dbPath, (err) => {
               priority: 'URGENT',
               status: 'IN_REVIEW',
               severity: 'HIGH',
+              project: 'SBI',
               assignedToId: ids['Sarah Chen'],
               createdById: ids['Sarah Chen'],
               dueDate: new Date(Date.now() - 2 * 86400000).toISOString(),
@@ -171,6 +199,7 @@ const db = new sqlite3.Database(dbPath, (err) => {
               priority: 'HIGH',
               status: 'TODO',
               severity: 'MEDIUM',
+              project: 'HDFC',
               assignedToId: ids['Mike Patel'],
               createdById: ids['Sarah Chen'],
               dueDate: new Date(Date.now() + 14 * 86400000).toISOString(),
@@ -183,13 +212,14 @@ const db = new sqlite3.Database(dbPath, (err) => {
               priority: 'HIGH',
               status: 'IN_PROGRESS',
               severity: 'HIGH',
+              project: 'Axis',
               assignedToId: ids['Alex Johnson'],
               createdById: ids['Mike Patel'],
               dueDate: new Date(Date.now() + 7 * 86400000).toISOString(),
             },
           ];
 
-          const insertTicket = db.prepare(`INSERT OR IGNORE INTO tickets (ticketNumber, title, description, category, priority, status, severity, assignedToId, createdById, dueDate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+          const insertTicket = db.prepare(`INSERT OR IGNORE INTO tickets (ticketNumber, title, description, category, priority, status, severity, project, assignedToId, createdById, dueDate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
           tickets.forEach((ticket) => {
             insertTicket.run(
               ticket.ticketNumber,
@@ -199,6 +229,7 @@ const db = new sqlite3.Database(dbPath, (err) => {
               ticket.priority,
               ticket.status,
               ticket.severity,
+              ticket.project,
               ticket.assignedToId,
               ticket.createdById,
               ticket.dueDate
@@ -371,9 +402,14 @@ app.get('/tickets', authenticate, authorize('ADMIN', 'MANAGER', 'ANALYST'), (req
 });
 
 app.post('/tickets', authenticate, authorize('ADMIN', 'MANAGER'), (req, res) => {
-  const { title, description, category, priority, severity, dueDate } = req.body;
+  const { title, description, category, priority, severity, dueDate, project, attachment } = req.body;
   if (!title || !description || !category) {
     return res.status(400).json({ error: 'Title, description, and category are required' });
+  }
+
+  const hasAttachment = attachment?.name && attachment?.type && attachment?.data;
+  if (hasAttachment && attachment.type !== 'application/pdf') {
+    return res.status(400).json({ error: 'Only PDF attachments are supported' });
   }
 
   resolveUserId(req.body, (resolveErr, assignedId) => {
@@ -384,9 +420,16 @@ app.post('/tickets', authenticate, authorize('ADMIN', 'MANAGER'), (req, res) => 
     db.get('SELECT COUNT(*) AS count FROM tickets', (countErr, row) => {
       if (countErr) return res.status(500).json({ error: countErr.message });
       const ticketNumber = `TKT-${String(row.count + 1).padStart(3, '0')}`;
+      const insertSql = hasAttachment
+        ? 'INSERT INTO tickets (ticketNumber, title, description, category, priority, status, severity, project, assignedToId, createdById, dueDate, assignmentPdfName, assignmentPdfType, assignmentPdfData) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        : 'INSERT INTO tickets (ticketNumber, title, description, category, priority, status, severity, project, assignedToId, createdById, dueDate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)';
+      const insertParams = hasAttachment
+        ? [ticketNumber, title, description, category, priority, 'TODO', severity || 'MEDIUM', project || null, assignedId || null, req.user.id, dueDate || null, attachment.name, attachment.type, attachment.data]
+        : [ticketNumber, title, description, category, priority, 'TODO', severity || 'MEDIUM', project || null, assignedId || null, req.user.id, dueDate || null];
+
       db.run(
-        'INSERT INTO tickets (ticketNumber, title, description, category, priority, status, severity, assignedToId, createdById, dueDate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        [ticketNumber, title, description, category, priority, 'TODO', severity || 'MEDIUM', assignedId || null, req.user.id, dueDate || null],
+        insertSql,
+        insertParams,
         function (err) {
           if (err) return res.status(500).json({ error: err.message });
           fetchTicketDetails(this.lastID, (fetchErr, ticket) => {
@@ -402,13 +445,29 @@ app.post('/tickets', authenticate, authorize('ADMIN', 'MANAGER'), (req, res) => 
 app.patch('/tickets/:id/assign', authenticate, authorize('ADMIN', 'MANAGER'), (req, res) => {
   const { id } = req.params;
   const assignedToId = req.body.assignedToId || null;
+  const attachment = req.body.attachment || null;
+  const attachmentName = attachment?.name || null;
+  const attachmentType = attachment?.type || null;
+  const attachmentData = attachment?.data || null;
 
   db.get('SELECT ticketNumber, assignedToId FROM tickets WHERE id = ?', [id], (err, ticket) => {
     if (err) return res.status(500).json({ error: err.message });
     if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
 
     const oldAssignedId = ticket.assignedToId;
-    db.run('UPDATE tickets SET assignedToId = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?', [assignedToId, id], function (updateErr) {
+    const hasAttachment = attachmentName && attachmentType && attachmentData;
+    if (hasAttachment && attachmentType !== 'application/pdf') {
+      return res.status(400).json({ error: 'Only PDF attachments are supported' });
+    }
+
+    const updateSql = hasAttachment
+      ? 'UPDATE tickets SET assignedToId = ?, assignmentPdfName = ?, assignmentPdfType = ?, assignmentPdfData = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?'
+      : 'UPDATE tickets SET assignedToId = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?';
+    const updateParams = hasAttachment
+      ? [assignedToId, attachmentName, attachmentType, attachmentData, id]
+      : [assignedToId, id];
+
+    db.run(updateSql, updateParams, function (updateErr) {
       if (updateErr) return res.status(500).json({ error: updateErr.message });
 
       const notify = (targetId, type, title, message) => {
