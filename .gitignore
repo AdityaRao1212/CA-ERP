@@ -1,5 +1,9 @@
 node_modules/
 node20/
+node-v20*.zip
+node-v20*.msi
+node20_contents.txt
+package-git.bin
 frontend/build/
 database/*.db
 .env
