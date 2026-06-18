@@ -13,11 +13,13 @@ const Sidebar = ({
     active = 'Dashboard',
     onNavigate = () => { },
     user = null,
+    canManageUsers = false,
     selectedProject = 'All Projects',
     onProjectChange = () => { },
     projectCounts = [],
 }) => {
     const [projectsOpen, setProjectsOpen] = useState(false);
+    const navigationItems = canManageUsers ? [...navItems, { label: 'Add people', path: 'Users' }] : navItems;
 
     return (
         <Box className="sidebar" component="aside">
@@ -32,7 +34,7 @@ const Sidebar = ({
                 <Typography variant="subtitle2" sx={{ color: '#94a3b8' }}>
                     Main Menu
                 </Typography>
-                {navItems.map((item) => (
+                {navigationItems.map((item) => (
                     <Typography
                         key={item.label}
                         className={`sidebarLink ${item.label === active ? 'active' : ''}`}

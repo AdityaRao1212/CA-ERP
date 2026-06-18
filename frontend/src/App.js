@@ -23,9 +23,12 @@ import {
   Alert,
   Chip,
   Stack,
+  InputAdornment,
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import SearchIcon from '@mui/icons-material/Search';
+import Visibility from '@mui/icons-material/Visibility';
+import VisibilityOff from '@mui/icons-material/VisibilityOff';
 import './App.css';
 import './theme.css';
 import Sidebar from './components/layout/Sidebar';
@@ -38,6 +41,7 @@ const priorities = ['URGENT', 'HIGH', 'MEDIUM', 'LOW'];
 const statuses = ['TODO', 'IN_PROGRESS', 'IN_REVIEW', 'DONE', 'CANCELLED'];
 const projectNames = ['HDFC', 'ICICI', 'SBI', 'Axis'];
 const projectFilters = ['All Projects', ...projectNames];
+const roleOptions = ['ADMIN', 'MANAGER', 'ANALYST', 'USER'];
 
 const initialTicket = {
   title: '',
@@ -60,6 +64,7 @@ const App = () => {
   const [token, setToken] = useState(localStorage.getItem('authToken') || '');
   const [loginValues, setLoginValues] = useState(initialLogin);
   const [loginError, setLoginError] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [tickets, setTickets] = useState([]);
   const [users, setUsers] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -71,9 +76,22 @@ const App = () => {
   const [alertSeverity, setAlertSeverity] = useState('success');
   const [assigningTicketId, setAssigningTicketId] = useState(null);
   const [selectedAssignee, setSelectedAssignee] = useState('');
+  const [userDialogOpen, setUserDialogOpen] = useState(false);
+  const [newUser, setNewUser] = useState({
+    name: '',
+    username: '',
+    email: '',
+    password: '',
+    role: 'USER',
+    department: '',
+  });
 
   const canEdit = useMemo(
     () => user && ['ADMIN', 'MANAGER'].includes(user.role),
+    [user]
+  );
+  const canManageUsers = useMemo(
+    () => user && user.role === 'ADMIN',
     [user]
   );
 
@@ -155,7 +173,8 @@ const App = () => {
   }, [user, fetchUsers, fetchTickets]);
 
   const handleLogin = async () => {
-    if (!loginValues.username || !loginValues.password) {
+    const username = loginValues.username.trim();
+    if (!username || !loginValues.password) {
       setLoginError('Email or username and password are required.');
       return;
     }
@@ -164,7 +183,7 @@ const App = () => {
       const response = await fetch('/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(loginValues),
+        body: JSON.stringify({ username, password: loginValues.password }),
       });
       if (!response.ok) {
         const errorData = await response.json();
@@ -210,6 +229,22 @@ const App = () => {
     setTicketAttachment(null);
   };
 
+  const handleUserDialogOpen = () => {
+    setNewUser({
+      name: '',
+      username: '',
+      email: '',
+      password: '',
+      role: 'USER',
+      department: '',
+    });
+    setUserDialogOpen(true);
+  };
+
+  const handleUserDialogClose = () => {
+    setUserDialogOpen(false);
+  };
+
   const handleTicketChange = (field) => (event) => {
     setNewTicket({ ...newTicket, [field]: event.target.value });
   };
@@ -240,6 +275,60 @@ const App = () => {
       type: file.type,
       data: attachmentData,
     });
+  };
+
+  const handleNewUserChange = (field) => (event) => {
+    setNewUser({ ...newUser, [field]: event.target.value });
+  };
+
+  const handleCreateUser = async () => {
+    if (!newUser.name || !newUser.username || !newUser.email || !newUser.password || !newUser.department) {
+      setAlertSeverity('warning');
+      setAlertMessage('Name, username, email, password, role, and department are required to add a user.');
+      return;
+    }
+
+    try {
+      const response = await fetch('/users', {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify(newUser),
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Unable to create user.');
+      }
+      setUserDialogOpen(false);
+      setAlertSeverity('success');
+      setAlertMessage('User added successfully.');
+      fetchUsers();
+    } catch (error) {
+      setAlertSeverity('error');
+      setAlertMessage(error.message);
+    }
+  };
+
+  const handleDeleteUser = async (userId) => {
+    if (!window.confirm('Remove this person from the system?')) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`/users/${userId}`, {
+        method: 'DELETE',
+        headers: authHeaders,
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Unable to remove user.');
+      }
+      setAlertSeverity('success');
+      setAlertMessage('Person removed successfully.');
+      fetchUsers();
+    } catch (error) {
+      setAlertSeverity('error');
+      setAlertMessage(error.message);
+    }
   };
 
   const handleCreateTicket = async () => {
@@ -377,11 +466,24 @@ const App = () => {
           />
           <TextField
             label="Password"
-            type="password"
+            type={showPassword ? 'text' : 'password'}
             value={loginValues.password}
             onChange={handleLoginChange('password')}
             fullWidth
             margin="normal"
+            InputProps={{
+              endAdornment: (
+                <InputAdornment position="end">
+                  <Button
+                    onClick={() => setShowPassword((visible) => !visible)}
+                    size="small"
+                    sx={{ minWidth: 0, padding: 0 }}
+                  >
+                    {showPassword ? <VisibilityOff /> : <Visibility />}
+                  </Button>
+                </InputAdornment>
+              ),
+            }}
           />
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 3, flexWrap: 'wrap', gap: 2 }}>
             <Typography variant="body2" color="textSecondary">
@@ -402,12 +504,23 @@ const App = () => {
         active={activePage}
         onNavigate={handlePageChange}
         user={user}
+        canManageUsers={canManageUsers}
         selectedProject={selectedProject}
         onProjectChange={setSelectedProject}
         projectCounts={projectCounts}
       />
       <Box className="mainContent">
-        <TopBar title={activePage === 'Dashboard' ? 'CA-ERP System Dashboard' : 'Tickets'} user={user} onLogout={handleLogout} />
+        <TopBar
+          title={
+            activePage === 'Dashboard'
+              ? 'CA-ERP System Dashboard'
+              : activePage === 'Tickets'
+                ? 'Ticket Management'
+                : 'Add people'
+          }
+          user={user}
+          onLogout={handleLogout}
+        />
 
         {alertMessage && (
           <Alert severity={alertSeverity} onClose={() => setAlertMessage('')} sx={{ mb: 3 }}>
@@ -529,6 +642,60 @@ const App = () => {
                 </Grid>
               ))}
             </Grid>
+          </>
+        ) : activePage === 'Users' ? (
+          <>
+            <Box className="tableHeader" sx={{ mb: 3, alignItems: 'center' }}>
+              <Typography variant="h6">Add people</Typography>
+              <Button variant="contained" startIcon={<AddIcon />} onClick={handleUserDialogOpen} disabled={!canManageUsers}>
+                Add User
+              </Button>
+            </Box>
+            <TableContainer component={Paper} className="riskTable">
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Name</TableCell>
+                    <TableCell>Username</TableCell>
+                    <TableCell>Email</TableCell>
+                    <TableCell>Role</TableCell>
+                    <TableCell>Department</TableCell>
+                    <TableCell align="right">Active Tickets</TableCell>
+                    <TableCell align="right">Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {users.map((profile) => (
+                    <TableRow key={profile.id} hover>
+                      <TableCell>{profile.name}</TableCell>
+                      <TableCell>{profile.username}</TableCell>
+                      <TableCell>{profile.email}</TableCell>
+                      <TableCell>{profile.role}</TableCell>
+                      <TableCell>{profile.department}</TableCell>
+                      <TableCell align="right">{profile.assignedCount || 0}</TableCell>
+                      <TableCell align="right">
+                        <Button
+                          size="small"
+                          color="error"
+                          variant="outlined"
+                          onClick={() => handleDeleteUser(profile.id)}
+                          disabled={profile.id === user.id}
+                        >
+                          Remove
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {users.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={7} align="center">
+                        No users available.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </TableContainer>
           </>
         ) : (
           <>
@@ -727,6 +894,43 @@ const App = () => {
           <DialogActions>
             <Button onClick={handleDialogClose}>Cancel</Button>
             <Button variant="contained" onClick={handleCreateTicket}>Create Ticket</Button>
+          </DialogActions>
+        </Dialog>
+
+        <Dialog open={userDialogOpen} onClose={handleUserDialogClose} maxWidth="sm" fullWidth>
+          <DialogTitle>Add New User</DialogTitle>
+          <DialogContent>
+            <Grid container spacing={2} sx={{ pt: 1 }}>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth label="Name" value={newUser.name} onChange={handleNewUserChange('name')} />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth label="Username" value={newUser.username} onChange={handleNewUserChange('username')} />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth label="Email" value={newUser.email} onChange={handleNewUserChange('email')} />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth type="password" label="Password" value={newUser.password} onChange={handleNewUserChange('password')} />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <FormControl fullWidth>
+                  <InputLabel>Role</InputLabel>
+                  <Select value={newUser.role} label="Role" onChange={handleNewUserChange('role')}>
+                    {roleOptions.map((role) => (
+                      <MenuItem key={role} value={role}>{role}</MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <TextField fullWidth label="Department" value={newUser.department} onChange={handleNewUserChange('department')} />
+              </Grid>
+            </Grid>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={handleUserDialogClose}>Cancel</Button>
+            <Button variant="contained" onClick={handleCreateUser}>Create User</Button>
           </DialogActions>
         </Dialog>
       </Box>

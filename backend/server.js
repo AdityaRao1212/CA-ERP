@@ -260,6 +260,8 @@ const authenticate = (req, res, next) => {
   next();
 };
 
+const ROLE_OPTIONS = ['ADMIN', 'MANAGER', 'ANALYST', 'USER'];
+
 const authorize = (...allowedRoles) => (req, res, next) => {
   if (!allowedRoles.includes(req.user.role)) {
     return res.status(403).json({ error: 'Access denied' });
@@ -368,6 +370,56 @@ app.get('/users', authenticate, authorize('ADMIN', 'MANAGER', 'ANALYST'), (req, 
       res.json(rows);
     }
   );
+});
+
+app.post('/users', authenticate, authorize('ADMIN'), (req, res) => {
+  const { name, username, email, password, role, department } = req.body;
+  if (!name || !username || !email || !password || !role || !department) {
+    return res.status(400).json({ error: 'Name, username, email, password, role, and department are required' });
+  }
+  if (!ROLE_OPTIONS.includes(role)) {
+    return res.status(400).json({ error: `Role must be one of: ${ROLE_OPTIONS.join(', ')}` });
+  }
+
+  db.run(
+    'INSERT INTO users (name, username, email, password, role, department, avatarColor, initials) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    [name, username, email, password, role, department, '#64748b', name.slice(0, 2).toUpperCase()],
+    function (err) {
+      if (err) {
+        if (err.message.includes('UNIQUE constraint failed')) {
+          return res.status(400).json({ error: 'Username or email already exists' });
+        }
+        return res.status(500).json({ error: err.message });
+      }
+      db.get(
+        'SELECT id, name, username, email, role, department, initials, avatarColor FROM users WHERE id = ?',
+        [this.lastID],
+        (selectErr, userRow) => {
+          if (selectErr) return res.status(500).json({ error: selectErr.message });
+          res.status(201).json(userRow);
+        }
+      );
+    }
+  );
+});
+
+app.delete('/users/:id', authenticate, authorize('ADMIN'), (req, res) => {
+  const { id } = req.params;
+  if (!id) {
+    return res.status(400).json({ error: 'User ID is required' });
+  }
+
+  db.get('SELECT id FROM users WHERE id = ?', [id], (err, userRow) => {
+    if (err) return res.status(500).json({ error: err.message });
+    if (!userRow) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    db.run('DELETE FROM users WHERE id = ?', [id], function (deleteErr) {
+      if (deleteErr) return res.status(500).json({ error: deleteErr.message });
+      res.json({ success: true });
+    });
+  });
 });
 
 app.get('/tickets', authenticate, authorize('ADMIN', 'MANAGER', 'ANALYST'), (req, res) => {
