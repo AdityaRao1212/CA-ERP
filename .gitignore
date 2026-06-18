@@ -4,6 +4,10 @@ node-v20*.zip
 node-v20*.msi
 node20_contents.txt
 package-git.bin
+fix_demo_users.js
+inspect_corruption.py
+repair_backend.py
+validate_api.js
 frontend/build/
 database/*.db
 .env
