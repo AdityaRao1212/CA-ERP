@@ -20,7 +20,8 @@ try {
   console.warn('Prisma loader error:', e.message);
 }
 
-app.use(express.json());
+app.use(express.json({ limit: '30mb' }));
+app.use(express.urlencoded({ extended: true, limit: '30mb' }));
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
@@ -48,6 +49,10 @@ const db = new sqlite3.Database(dbPath, (err) => {
       department TEXT NOT NULL,
       avatarColor TEXT NOT NULL,
       initials TEXT NOT NULL,
+      l2UserId INTEGER,
+      photoName TEXT,
+      photoType TEXT,
+      photoData TEXT,
       createdAt TEXT DEFAULT CURRENT_TIMESTAMP
     )`);
 
@@ -93,6 +98,35 @@ const db = new sqlite3.Database(dbPath, (err) => {
         console.warn('Unable to add tickets.assignmentPdfData column:', alterErr.message);
       }
     });
+    db.run('ALTER TABLE users ADD COLUMN l2UserId INTEGER', (alterErr) => {
+      if (alterErr && !/duplicate column name/i.test(alterErr.message)) {
+        console.warn('Unable to add users.l2UserId column:', alterErr.message);
+      }
+    });
+    db.run('ALTER TABLE users ADD COLUMN photoName TEXT', (alterErr) => {
+      if (alterErr && !/duplicate column name/i.test(alterErr.message)) {
+        console.warn('Unable to add users.photoName column:', alterErr.message);
+      }
+    });
+    db.run('ALTER TABLE users ADD COLUMN photoType TEXT', (alterErr) => {
+      if (alterErr && !/duplicate column name/i.test(alterErr.message)) {
+        console.warn('Unable to add users.photoType column:', alterErr.message);
+      }
+    });
+    db.run('ALTER TABLE users ADD COLUMN photoData TEXT', (alterErr) => {
+      if (alterErr && !/duplicate column name/i.test(alterErr.message)) {
+        console.warn('Unable to add users.photoData column:', alterErr.message);
+      }
+    });
+
+    db.run(`CREATE TABLE IF NOT EXISTS attendance (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      userId INTEGER NOT NULL,
+      loginAt TEXT NOT NULL,
+      logoutAt TEXT,
+      createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
+      updatedAt TEXT DEFAULT CURRENT_TIMESTAMP
+    )`);
 
     db.run(`CREATE TABLE IF NOT EXISTS notifications (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -119,6 +153,12 @@ const db = new sqlite3.Database(dbPath, (err) => {
       createdAt TEXT DEFAULT CURRENT_TIMESTAMP
     )`);
 
+    db.run("UPDATE users SET role = CASE UPPER(role) WHEN 'ADMIN' THEN 'Admin' WHEN 'MANAGER' THEN 'Manager' WHEN 'ANALYST' THEN 'L1' WHEN 'USER' THEN 'L1' WHEN 'L2' THEN 'L2' ELSE role END", (roleErr) => {
+      if (roleErr) {
+        console.warn('Unable to normalize existing roles:', roleErr.message);
+      }
+    });
+
     db.get('SELECT COUNT(*) AS count FROM users', (countErr, userRow) => {
       if (countErr) {
         console.error('Unable to verify user count:', countErr.message);
@@ -126,11 +166,12 @@ const db = new sqlite3.Database(dbPath, (err) => {
       }
       if (userRow.count === 0) {
         const insert = db.prepare(
-          'INSERT OR IGNORE INTO users (name, username, email, password, role, department, avatarColor, initials) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+          'INSERT OR IGNORE INTO users (name, username, email, password, role, department, avatarColor, initials, l2UserId) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
         );
-        insert.run('Alex Johnson', 'alex', 'alex@ca-erp.com', 'password123', 'ADMIN', 'IT Security', '#6366f1', 'AJ');
-        insert.run('Sarah Chen', 'sarah', 'sarah@ca-erp.com', 'password123', 'MANAGER', 'Compliance', '#ec4899', 'SC');
-        insert.run('Mike Patel', 'mike', 'mike@ca-erp.com', 'password123', 'ANALYST', 'Operations', '#10b981', 'MP');
+        insert.run('Alex Johnson', 'alex', 'alex@ca-erp.com', 'password123', 'Admin', 'IT Security', '#6366f1', 'AJ', null);
+        insert.run('Sarah Chen', 'sarah', 'sarah@ca-erp.com', 'password123', 'Manager', 'Compliance', '#ec4899', 'SC', null);
+        insert.run('Mike Patel', 'mike', 'mike@ca-erp.com', 'password123', 'L1', 'Operations', '#10b981', 'MP', null);
+        insert.run('Nina Rao', 'nina', 'nina@ca-erp.com', 'password123', 'L2', 'Review', '#8b5cf6', 'NR', null);
         insert.finalize(() => console.log('Seeded CA-ERP System demo users'));
       }
     });
@@ -260,13 +301,34 @@ const authenticate = (req, res, next) => {
   next();
 };
 
-const ROLE_OPTIONS = ['ADMIN', 'MANAGER', 'ANALYST', 'USER'];
+const MAX_PDF_SIZE_BYTES = 15 * 1024 * 1024;
+const MAX_PROFILE_PHOTO_SIZE_BYTES = 5 * 1024 * 1024;
+const ROLE_OPTIONS = ['Admin', 'Manager', 'L1', 'L2'];
+
+const normalizeRole = (role) => {
+  const raw = String(role || '').trim();
+  if (!raw) return 'L1';
+  const upper = raw.toUpperCase();
+  if (['ADMIN', 'ADMINISTRATOR', 'SUPERADMIN'].includes(upper)) return 'Admin';
+  if (['MANAGER', 'SUPERVISOR'].includes(upper)) return 'Manager';
+  if (['L2', 'REVIEWER', 'LEAD'].includes(upper)) return 'L2';
+  if (['L1', 'ANALYST', 'USER', 'OPERATOR', 'EMPLOYEE'].includes(upper)) return 'L1';
+  return raw;
+};
 
 const authorize = (...allowedRoles) => (req, res, next) => {
-  if (!allowedRoles.includes(req.user.role)) {
+  const normalizedRole = normalizeRole(req.user?.role);
+  if (!allowedRoles.map(normalizeRole).includes(normalizedRole)) {
     return res.status(403).json({ error: 'Access denied' });
   }
+  req.user.role = normalizedRole;
   next();
+};
+
+const getAttachmentSizeBytes = (attachmentData) => {
+  if (!attachmentData) return 0;
+  const base64Payload = attachmentData.includes(',') ? attachmentData.split(',')[1] : attachmentData;
+  return Buffer.from(base64Payload, 'base64').length;
 };
 
 const resolveUserId = (payload, callback) => {
@@ -332,7 +394,7 @@ app.post('/auth/login', (req, res) => {
   }
 
   db.get(
-    'SELECT id, name, username, email, role, department, avatarColor, initials FROM users WHERE (username = ? OR email = ?) AND password = ?',
+    'SELECT id, name, username, email, role, department, avatarColor, initials, l2UserId, photoName, photoType, photoData FROM users WHERE (username = ? OR email = ?) AND password = ?',
     [username, username, password],
     (err, userRow) => {
       if (err) {
@@ -341,9 +403,34 @@ app.post('/auth/login', (req, res) => {
       if (!userRow) {
         return res.status(401).json({ error: 'Invalid credentials' });
       }
+
+      const normalizedUser = {
+        ...userRow,
+        role: normalizeRole(userRow.role),
+      };
+
       const token = makeToken();
-      sessions[token] = { user: userRow, createdAt: Date.now() };
-      res.json({ token, user: userRow });
+      sessions[token] = { user: normalizedUser, createdAt: Date.now() };
+
+      const createAttendanceEntry = () => {
+        db.get('SELECT id FROM attendance WHERE userId = ? AND logoutAt IS NULL ORDER BY id DESC LIMIT 1', [normalizedUser.id], (attendanceErr, activeRow) => {
+          if (attendanceErr) {
+            console.warn('Unable to check attendance state:', attendanceErr.message);
+            return res.json({ token, user: normalizedUser });
+          }
+          if (activeRow) {
+            return res.json({ token, user: normalizedUser });
+          }
+          db.run('INSERT INTO attendance (userId, loginAt, createdAt, updatedAt) VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)', [normalizedUser.id, new Date().toISOString()], (insertErr) => {
+            if (insertErr) {
+              console.warn('Unable to create attendance entry:', insertErr.message);
+            }
+            res.json({ token, user: normalizedUser });
+          });
+        });
+      };
+
+      createAttendanceEntry();
     }
   );
 });
@@ -355,14 +442,30 @@ app.get('/auth/me', authenticate, (req, res) => {
 app.post('/auth/logout', authenticate, (req, res) => {
   const token = req.headers.authorization.slice(7);
   delete sessions[token];
-  res.json({ success: true });
+
+  db.get('SELECT id FROM attendance WHERE userId = ? AND logoutAt IS NULL ORDER BY id DESC LIMIT 1', [req.user.id], (err, activeRow) => {
+    if (err) {
+      return res.status(500).json({ error: err.message });
+    }
+    if (!activeRow) {
+      return res.json({ success: true });
+    }
+    db.run('UPDATE attendance SET logoutAt = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?', [new Date().toISOString(), activeRow.id], (updateErr) => {
+      if (updateErr) {
+        return res.status(500).json({ error: updateErr.message });
+      }
+      res.json({ success: true });
+    });
+  });
 });
 
-app.get('/users', authenticate, authorize('ADMIN', 'MANAGER', 'ANALYST'), (req, res) => {
+app.get('/users', authenticate, authorize('Admin', 'Manager', 'L1', 'L2'), (req, res) => {
   db.all(
-    `SELECT u.id, u.name, u.email, u.username, u.role, u.department, u.initials, u.avatarColor,
+    `SELECT u.id, u.name, u.email, u.username, u.role, u.department, u.initials, u.avatarColor, u.l2UserId, u.photoName, u.photoType, u.photoData,
+            l2.name AS l2Name,
             (SELECT COUNT(*) FROM tickets t WHERE t.assignedToId = u.id AND t.status NOT IN ('DONE', 'CANCELLED')) AS assignedCount
      FROM users u
+     LEFT JOIN users l2 ON u.l2UserId = l2.id
      ORDER BY u.name ASC`,
     [],
     (err, rows) => {
@@ -372,18 +475,52 @@ app.get('/users', authenticate, authorize('ADMIN', 'MANAGER', 'ANALYST'), (req, 
   );
 });
 
-app.post('/users', authenticate, authorize('ADMIN'), (req, res) => {
-  const { name, username, email, password, role, department } = req.body;
+app.post('/users', authenticate, authorize('Admin'), (req, res) => {
+  const { name, username, email, password, role, department, l2UserId, photoName, photoType, photoData } = req.body;
   if (!name || !username || !email || !password || !role || !department) {
     return res.status(400).json({ error: 'Name, username, email, password, role, and department are required' });
   }
-  if (!ROLE_OPTIONS.includes(role)) {
+
+  const normalizedRole = normalizeRole(role);
+  if (!ROLE_OPTIONS.includes(normalizedRole)) {
     return res.status(400).json({ error: `Role must be one of: ${ROLE_OPTIONS.join(', ')}` });
   }
 
+  if (normalizedRole === 'L1' && !l2UserId) {
+    return res.status(400).json({ error: 'L1 users must have an L2 reviewer assigned.' });
+  }
+
+  if (normalizedRole === 'L1' && l2UserId) {
+    return db.get('SELECT id FROM users WHERE id = ? AND role = ?', [l2UserId, 'L2'], (lookupErr, reviewerRow) => {
+      if (lookupErr) return res.status(500).json({ error: lookupErr.message });
+      if (!reviewerRow) return res.status(400).json({ error: 'The selected reviewer must be an existing L2 user.' });
+
+      db.run(
+        'INSERT INTO users (name, username, email, password, role, department, avatarColor, initials, l2UserId, photoName, photoType, photoData) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [name, username, email, password, normalizedRole, department, '#64748b', name.slice(0, 2).toUpperCase(), Number(l2UserId), photoName || null, photoType || null, photoData || null],
+        function (err) {
+          if (err) {
+            if (err.message.includes('UNIQUE constraint failed')) {
+              return res.status(400).json({ error: 'Username or email already exists' });
+            }
+            return res.status(500).json({ error: err.message });
+          }
+          db.get(
+            'SELECT id, name, username, email, role, department, initials, avatarColor, l2UserId FROM users WHERE id = ?',
+            [this.lastID],
+            (selectErr, userRow) => {
+              if (selectErr) return res.status(500).json({ error: selectErr.message });
+              res.status(201).json(userRow);
+            }
+          );
+        }
+      );
+    });
+  }
+
   db.run(
-    'INSERT INTO users (name, username, email, password, role, department, avatarColor, initials) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [name, username, email, password, role, department, '#64748b', name.slice(0, 2).toUpperCase()],
+    'INSERT INTO users (name, username, email, password, role, department, avatarColor, initials, l2UserId, photoName, photoType, photoData) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [name, username, email, password, normalizedRole, department, '#64748b', name.slice(0, 2).toUpperCase(), normalizedRole === 'L1' ? Number(l2UserId) : null, photoName || null, photoType || null, photoData || null],
     function (err) {
       if (err) {
         if (err.message.includes('UNIQUE constraint failed')) {
@@ -392,7 +529,7 @@ app.post('/users', authenticate, authorize('ADMIN'), (req, res) => {
         return res.status(500).json({ error: err.message });
       }
       db.get(
-        'SELECT id, name, username, email, role, department, initials, avatarColor FROM users WHERE id = ?',
+        'SELECT id, name, username, email, role, department, initials, avatarColor, l2UserId FROM users WHERE id = ?',
         [this.lastID],
         (selectErr, userRow) => {
           if (selectErr) return res.status(500).json({ error: selectErr.message });
@@ -403,7 +540,75 @@ app.post('/users', authenticate, authorize('ADMIN'), (req, res) => {
   );
 });
 
-app.delete('/users/:id', authenticate, authorize('ADMIN'), (req, res) => {
+app.put('/users/:id', authenticate, authorize('Admin'), (req, res) => {
+  const { id } = req.params;
+  const { name, username, email, password, role, department, l2UserId, photoName, photoType, photoData } = req.body;
+
+  if (!name || !username || !email || !role || !department) {
+    return res.status(400).json({ error: 'Name, username, email, role, and department are required' });
+  }
+
+  const normalizedRole = normalizeRole(role);
+  if (!ROLE_OPTIONS.includes(normalizedRole)) {
+    return res.status(400).json({ error: `Role must be one of: ${ROLE_OPTIONS.join(', ')}` });
+  }
+
+  if (normalizedRole === 'L1' && !l2UserId) {
+    return res.status(400).json({ error: 'L1 users must have an L2 reviewer assigned.' });
+  }
+
+  const updateUser = () => {
+    const updates = ['name = ?', 'username = ?', 'email = ?', 'role = ?', 'department = ?', 'l2UserId = ?'];
+    const params = [name, username, email, normalizedRole, department, normalizedRole === 'L1' ? Number(l2UserId) : null];
+
+    if (password) {
+      updates.splice(3, 0, 'password = ?');
+      params.splice(3, 0, password);
+    }
+
+    const hasPhoto = photoData && photoName && photoType;
+    if (hasPhoto) {
+      updates.push('photoName = ?', 'photoType = ?', 'photoData = ?');
+      params.push(photoName, photoType, photoData);
+    }
+
+    params.push(id);
+
+    db.run(
+      `UPDATE users SET ${updates.join(', ')} WHERE id = ?`,
+      params,
+      function (err) {
+        if (err) {
+          if (err.message.includes('UNIQUE constraint failed')) {
+            return res.status(400).json({ error: 'Username or email already exists' });
+          }
+          return res.status(500).json({ error: err.message });
+        }
+        db.get(
+          'SELECT id, name, username, email, role, department, initials, avatarColor, l2UserId FROM users WHERE id = ?',
+          [id],
+          (selectErr, userRow) => {
+            if (selectErr) return res.status(500).json({ error: selectErr.message });
+            if (!userRow) return res.status(404).json({ error: 'User not found' });
+            res.json(userRow);
+          }
+        );
+      }
+    );
+  };
+
+  if (normalizedRole === 'L1' && l2UserId) {
+    return db.get('SELECT id FROM users WHERE id = ? AND role = ?', [l2UserId, 'L2'], (lookupErr, reviewerRow) => {
+      if (lookupErr) return res.status(500).json({ error: lookupErr.message });
+      if (!reviewerRow) return res.status(400).json({ error: 'The selected reviewer must be an existing L2 user.' });
+      updateUser();
+    });
+  }
+
+  updateUser();
+});
+
+app.delete('/users/:id', authenticate, authorize('Admin'), (req, res) => {
   const { id } = req.params;
   if (!id) {
     return res.status(400).json({ error: 'User ID is required' });
@@ -422,7 +627,18 @@ app.delete('/users/:id', authenticate, authorize('ADMIN'), (req, res) => {
   });
 });
 
-app.get('/tickets', authenticate, authorize('ADMIN', 'MANAGER', 'ANALYST'), (req, res) => {
+app.get('/tickets', authenticate, authorize('Admin', 'Manager', 'L1', 'L2'), (req, res) => {
+  const currentRole = normalizeRole(req.user.role);
+  const whereClauses = [];
+  const params = [];
+
+  if (currentRole === 'L1' || currentRole === 'L2') {
+    whereClauses.push('t.assignedToId = ?');
+    params.push(req.user.id);
+  }
+
+  const whereSql = whereClauses.length ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
   db.all(
     `SELECT t.*, 
       a.id AS assignedToId, a.name AS assignedToName, a.initials AS assignedToInitials, a.avatarColor AS assignedToAvatarColor,
@@ -430,8 +646,9 @@ app.get('/tickets', authenticate, authorize('ADMIN', 'MANAGER', 'ANALYST'), (req
     FROM tickets t
     LEFT JOIN users a ON t.assignedToId = a.id
     LEFT JOIN users c ON t.createdById = c.id
+    ${whereSql}
     ORDER BY t.id DESC`,
-    [],
+    params,
     (err, rows) => {
       if (err) return res.status(500).json({ error: err.message });
       res.json(rows.map((ticket) => ({
@@ -453,8 +670,8 @@ app.get('/tickets', authenticate, authorize('ADMIN', 'MANAGER', 'ANALYST'), (req
   );
 });
 
-app.post('/tickets', authenticate, authorize('ADMIN', 'MANAGER'), (req, res) => {
-  const { title, description, category, priority, severity, dueDate, project, attachment } = req.body;
+app.post('/tickets', authenticate, authorize('Admin', 'Manager'), (req, res) => {
+  const { title, description, category, priority, severity, dueDate, project, attachment, assignedToId } = req.body;
   if (!title || !description || !category) {
     return res.status(400).json({ error: 'Title, description, and category are required' });
   }
@@ -462,6 +679,9 @@ app.post('/tickets', authenticate, authorize('ADMIN', 'MANAGER'), (req, res) => 
   const hasAttachment = attachment?.name && attachment?.type && attachment?.data;
   if (hasAttachment && attachment.type !== 'application/pdf') {
     return res.status(400).json({ error: 'Only PDF attachments are supported' });
+  }
+  if (hasAttachment && getAttachmentSizeBytes(attachment.data) > MAX_PDF_SIZE_BYTES) {
+    return res.status(400).json({ error: 'PDF attachments must be 15 MB or smaller.' });
   }
 
   resolveUserId(req.body, (resolveErr, assignedId) => {
@@ -494,7 +714,7 @@ app.post('/tickets', authenticate, authorize('ADMIN', 'MANAGER'), (req, res) => 
   });
 });
 
-app.patch('/tickets/:id/assign', authenticate, authorize('ADMIN', 'MANAGER'), (req, res) => {
+app.patch('/tickets/:id/assign', authenticate, authorize('Admin', 'Manager', 'L1', 'L2'), (req, res) => {
   const { id } = req.params;
   const assignedToId = req.body.assignedToId || null;
   const attachment = req.body.attachment || null;
@@ -508,8 +728,16 @@ app.patch('/tickets/:id/assign', authenticate, authorize('ADMIN', 'MANAGER'), (r
 
     const oldAssignedId = ticket.assignedToId;
     const hasAttachment = attachmentName && attachmentType && attachmentData;
+    const currentUserRole = normalizeRole(req.user.role);
+    const canReassign = ['Admin', 'Manager'].includes(currentUserRole);
+    const assignmentChanged = assignedToId !== oldAssignedId;
+
     if (hasAttachment && attachmentType !== 'application/pdf') {
       return res.status(400).json({ error: 'Only PDF attachments are supported' });
+    }
+
+    if (!canReassign && assignmentChanged) {
+      return res.status(403).json({ error: 'Only admins and managers can reassign tickets.' });
     }
 
     const updateSql = hasAttachment
@@ -584,11 +812,140 @@ app.patch('/tickets/:id/assign', authenticate, authorize('ADMIN', 'MANAGER'), (r
   });
 });
 
+app.patch('/tickets/:id/status', authenticate, authorize('Admin', 'Manager', 'L1', 'L2'), (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+  if (!status) {
+    return res.status(400).json({ error: 'Status is required' });
+  }
+
+  db.get(
+    `SELECT t.*, u.role AS assignedRole, u.l2UserId
+     FROM tickets t
+     LEFT JOIN users u ON t.assignedToId = u.id
+     WHERE t.id = ?`,
+    [id],
+    (err, ticket) => {
+      if (err) return res.status(500).json({ error: err.message });
+      if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
+
+      const assignedRole = normalizeRole(ticket.assignedRole);
+      const fallbackAssignee = status === 'DONE' && assignedRole === 'L1' && ticket.l2UserId ? ticket.l2UserId : ticket.assignedToId;
+
+      db.run(
+        'UPDATE tickets SET status = ?, assignedToId = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
+        [status, fallbackAssignee, id],
+        function (updateErr) {
+          if (updateErr) return res.status(500).json({ error: updateErr.message });
+
+          const notify = (targetId, type, title, message) => {
+            if (!targetId) return;
+            db.run(
+              'INSERT INTO notifications (userId, title, message, type, ticketId, ticketNum, fromUserId, fromName, read) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)',
+              [targetId, title, message, type, id, ticket.ticketNumber, req.user.id, req.user.name || req.user.username]
+            );
+          };
+
+          if (status === 'DONE' && fallbackAssignee && fallbackAssignee !== ticket.assignedToId) {
+            notify(
+              fallbackAssignee,
+              'REVIEW_REQUIRED',
+              `${ticket.ticketNumber} moved for review`,
+              `${req.user.name || req.user.username} completed ${ticket.ticketNumber} and routed it to the next reviewer.`
+            );
+          }
+
+          db.get(
+            `SELECT t.*, 
+              a.id AS assignedToId, a.name AS assignedToName, a.initials AS assignedToInitials, a.avatarColor AS assignedToAvatarColor,
+              c.id AS createdById, c.name AS createdByName, c.initials AS createdByInitials, c.avatarColor AS createdByAvatarColor
+            FROM tickets t
+            LEFT JOIN users a ON t.assignedToId = a.id
+            LEFT JOIN users c ON t.createdById = c.id
+            WHERE t.id = ?`,
+            [id],
+            (fetchErr, updated) => {
+              if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+              res.json({
+                ...updated,
+                assignedTo: updated.assignedToId ? {
+                  id: updated.assignedToId,
+                  name: updated.assignedToName,
+                  initials: updated.assignedToInitials,
+                  avatarColor: updated.assignedToAvatarColor,
+                } : null,
+                createdBy: updated.createdById ? {
+                  id: updated.createdById,
+                  name: updated.createdByName,
+                  initials: updated.createdByInitials,
+                  avatarColor: updated.createdByAvatarColor,
+                } : null,
+              });
+            }
+          );
+        }
+      );
+    }
+  );
+});
+
+app.get('/attendance', authenticate, authorize('Admin', 'Manager'), (req, res) => {
+  const range = String(req.query.range || 'all').toLowerCase();
+  const targetDate = req.query.date || new Date().toISOString().slice(0, 10);
+  const targetMonth = req.query.month || new Date().toISOString().slice(0, 7);
+  const targetYear = req.query.year || new Date().getFullYear().toString();
+  const userId = req.query.userId ? Number(req.query.userId) : null;
+
+  const clauses = [];
+  const params = [];
+
+  if (userId) {
+    clauses.push('a.userId = ?');
+    params.push(userId);
+  }
+
+  if (range === 'daily') {
+    clauses.push('(date(a.loginAt) = ? OR date(a.logoutAt) = ?)');
+    params.push(targetDate, targetDate);
+  } else if (range === 'monthly') {
+    clauses.push("(strftime('%Y-%m', a.loginAt) = ? OR strftime('%Y-%m', a.logoutAt) = ?)");
+    params.push(targetMonth, targetMonth);
+  } else if (range === 'yearly') {
+    clauses.push("(strftime('%Y', a.loginAt) = ? OR strftime('%Y', a.logoutAt) = ?)");
+    params.push(targetYear, targetYear);
+  }
+
+  const whereClause = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+
+  db.all(
+    `SELECT a.id, a.userId, a.loginAt, a.logoutAt, a.createdAt, a.updatedAt,
+            u.name AS userName, u.role, u.initials, u.avatarColor
+     FROM attendance a
+     LEFT JOIN users u ON a.userId = u.id
+     ${whereClause}
+     ORDER BY a.loginAt DESC`,
+    params,
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json(rows);
+    }
+  );
+});
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
 app.use(express.static(path.join(__dirname, '..', 'frontend', 'build')));
+
+app.use((err, req, res, next) => {
+  console.error('Unhandled server error:', err);
+  if (res.headersSent) {
+    return next(err);
+  }
+  res.status(500).json({ error: err.message || 'Internal server error' });
+});
+
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'frontend', 'build', 'index.html'));
 });

@@ -14,12 +14,17 @@ const Sidebar = ({
     onNavigate = () => { },
     user = null,
     canManageUsers = false,
+    canManageAttendance = false,
     selectedProject = 'All Projects',
     onProjectChange = () => { },
     projectCounts = [],
 }) => {
     const [projectsOpen, setProjectsOpen] = useState(false);
-    const navigationItems = canManageUsers ? [...navItems, { label: 'Add people', path: 'Users' }] : navItems;
+    const navigationItems = [
+        ...navItems,
+        ...(canManageUsers ? [{ label: 'Add people', path: 'Users' }] : []),
+        ...(canManageAttendance ? [{ label: 'Attendance', path: 'Attendance' }] : []),
+    ];
 
     return (
         <Box className="sidebar" component="aside">
