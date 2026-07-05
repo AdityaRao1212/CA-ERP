@@ -7,6 +7,9 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const dbPath = path.join(__dirname, '..', 'database', 'tickets.db');
 const sessions = {};
+const { EventEmitter } = require('events');
+const commentEmitter = new EventEmitter();
+commentEmitter.setMaxListeners(0);
 
 let prisma = null;
 try {
@@ -152,6 +155,20 @@ const db = new sqlite3.Database(dbPath, (err) => {
       message TEXT,
       createdAt TEXT DEFAULT CURRENT_TIMESTAMP
     )`);
+
+    db.run(`CREATE TABLE IF NOT EXISTS ticket_comments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ticketId INTEGER NOT NULL,
+      userId INTEGER NOT NULL,
+      parentId INTEGER,
+      body TEXT NOT NULL,
+      createdAt TEXT DEFAULT CURRENT_TIMESTAMP,
+      updatedAt TEXT DEFAULT CURRENT_TIMESTAMP
+    )`);
+
+    db.run('CREATE INDEX IF NOT EXISTS idx_ticket_comments_ticketId ON ticket_comments (ticketId, createdAt)', () => { });
+    db.run('CREATE INDEX IF NOT EXISTS idx_ticket_comments_parentId ON ticket_comments (parentId)', () => { });
+
 
     db.run("UPDATE users SET role = CASE UPPER(role) WHEN 'ADMIN' THEN 'Admin' WHEN 'MANAGER' THEN 'Manager' WHEN 'ANALYST' THEN 'L1' WHEN 'USER' THEN 'L1' WHEN 'L2' THEN 'L2' ELSE role END", (roleErr) => {
       if (roleErr) {
@@ -642,7 +659,8 @@ app.get('/tickets', authenticate, authorize('Admin', 'Manager', 'L1', 'L2'), (re
   db.all(
     `SELECT t.*, 
       a.id AS assignedToId, a.name AS assignedToName, a.initials AS assignedToInitials, a.avatarColor AS assignedToAvatarColor,
-      c.id AS createdById, c.name AS createdByName, c.initials AS createdByInitials, c.avatarColor AS createdByAvatarColor
+      c.id AS createdById, c.name AS createdByName, c.initials AS createdByInitials, c.avatarColor AS createdByAvatarColor,
+      COALESCE((SELECT COUNT(*) FROM ticket_comments tc WHERE tc.ticketId = t.id), 0) AS commentCount
     FROM tickets t
     LEFT JOIN users a ON t.assignedToId = a.id
     LEFT JOIN users c ON t.createdById = c.id
@@ -665,9 +683,223 @@ app.get('/tickets', authenticate, authorize('Admin', 'Manager', 'L1', 'L2'), (re
           initials: ticket.createdByInitials,
           avatarColor: ticket.createdByAvatarColor,
         } : null,
+        commentCount: Number(ticket.commentCount || 0),
       })));
     }
   );
+});
+
+app.get('/tickets/:id/comments', authenticate, authorize('Admin', 'Manager', 'L1', 'L2'), (req, res) => {
+  const { id } = req.params;
+  db.get('SELECT id FROM tickets WHERE id = ?', [id], (ticketErr, ticketRow) => {
+    if (ticketErr) return res.status(500).json({ error: ticketErr.message });
+    if (!ticketRow) return res.status(404).json({ error: 'Ticket not found' });
+
+    db.all(
+      `SELECT tc.*, u.name AS userName, u.initials AS userInitials, u.avatarColor AS userAvatarColor
+       FROM ticket_comments tc
+       LEFT JOIN users u ON tc.userId = u.id
+       WHERE tc.ticketId = ?
+       ORDER BY tc.createdAt ASC`,
+      [id],
+      (err, rows) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(rows.map((comment) => ({
+          ...comment,
+          user: comment.userId ? {
+            id: comment.userId,
+            name: comment.userName,
+            initials: comment.userInitials,
+            avatarColor: comment.userAvatarColor,
+          } : null,
+        })));
+      }
+    );
+  });
+});
+
+// Server-Sent Events for live comments
+app.get('/tickets/:id/comments/stream', (req, res) => {
+  const { id } = req.params;
+  // Support token via query param for EventSource (browsers can't set auth headers)
+  const token = req.query.token || (req.headers.authorization && req.headers.authorization.startsWith('Bearer ') ? req.headers.authorization.slice(7) : null);
+  const session = token ? sessions[token] : null;
+  if (!session) {
+    res.status(401).end();
+    return;
+  }
+  req.user = session.user;
+  // simple role check
+  const normalizedRole = normalizeRole(req.user?.role);
+  if (!['Admin', 'Manager', 'L1', 'L2'].includes(normalizedRole)) {
+    res.status(403).end();
+    return;
+  }
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders && res.flushHeaders();
+
+  const onComment = (payload) => {
+    if (!payload) return;
+    if (payload.ticketId && Number(payload.ticketId) !== Number(id) && payload.type !== 'ticket-updated') return;
+    res.write(`event: ${payload.type}\n`);
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  };
+
+  commentEmitter.on('comment', onComment);
+
+  req.on('close', () => {
+    commentEmitter.removeListener('comment', onComment);
+  });
+});
+
+app.post('/tickets/:id/comments', authenticate, authorize('Admin', 'Manager', 'L1', 'L2'), (req, res) => {
+  const { id } = req.params;
+  const { content, parentId } = req.body;
+  const body = String(content || '').trim();
+
+  if (!body) {
+    return res.status(400).json({ error: 'Comment body is required.' });
+  }
+
+  db.get('SELECT id, assignedToId, createdById, ticketNumber FROM tickets WHERE id = ?', [id], (ticketErr, ticketRow) => {
+    if (ticketErr) return res.status(500).json({ error: ticketErr.message });
+    if (!ticketRow) return res.status(404).json({ error: 'Ticket not found' });
+
+    db.run(
+      'INSERT INTO ticket_comments (ticketId, userId, parentId, body, createdAt, updatedAt) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)',
+      [id, req.user.id, parentId || null, body],
+      function (insertErr) {
+        if (insertErr) return res.status(500).json({ error: insertErr.message });
+
+        db.run('UPDATE tickets SET updatedAt = CURRENT_TIMESTAMP WHERE id = ?', [id]);
+
+        db.get(
+          `SELECT tc.*, u.name AS userName, u.initials AS userInitials, u.avatarColor AS userAvatarColor
+           FROM ticket_comments tc
+           LEFT JOIN users u ON tc.userId = u.id
+           WHERE tc.id = ?`,
+          [this.lastID],
+          (selectErr, comment) => {
+            if (selectErr) return res.status(500).json({ error: selectErr.message });
+
+            const notifyTargets = [ticketRow.assignedToId, ticketRow.createdById].filter(Boolean);
+            notifyTargets.forEach((targetId) => {
+              if (targetId === req.user.id) return;
+              db.run(
+                'INSERT INTO notifications (userId, title, message, type, ticketId, ticketNum, fromUserId, fromName, read) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)',
+                [targetId, 'New ticket comment', `${req.user.name || req.user.username} commented on ${ticketRow.ticketNumber}`, 'COMMENT', id, ticketRow.ticketNumber, req.user.id, req.user.name || req.user.username]
+              );
+            });
+
+            // Emit SSE event for newly created comment
+            try {
+              commentEmitter.emit('comment', { type: 'comment-created', ticketId: Number(id), comment: { ...comment, user: { id: comment.userId, name: comment.userName, initials: comment.userInitials, avatarColor: comment.userAvatarColor } } });
+            } catch (e) {
+              console.warn('SSE emit failed for comment-created', e.message);
+            }
+
+            res.status(201).json({
+              ...comment,
+              user: comment.userId ? {
+                id: comment.userId,
+                name: comment.userName,
+                initials: comment.userInitials,
+                avatarColor: comment.userAvatarColor,
+              } : null,
+            });
+          }
+        );
+      }
+    );
+  });
+});
+
+
+
+app.patch('/tickets/:id/comments/:commentId', authenticate, authorize('Admin', 'Manager', 'L1', 'L2'), (req, res) => {
+  const { id, commentId } = req.params;
+  const { content } = req.body;
+  const body = String(content || '').trim();
+
+  if (!body) {
+    return res.status(400).json({ error: 'Comment body is required.' });
+  }
+
+  db.get('SELECT id FROM tickets WHERE id = ?', [id], (ticketErr, ticketRow) => {
+    if (ticketErr) return res.status(500).json({ error: ticketErr.message });
+    if (!ticketRow) return res.status(404).json({ error: 'Ticket not found' });
+
+    db.get('SELECT id, userId FROM ticket_comments WHERE id = ? AND ticketId = ?', [commentId, id], (commentErr, commentRow) => {
+      if (commentErr) return res.status(500).json({ error: commentErr.message });
+      if (!commentRow) return res.status(404).json({ error: 'Comment not found' });
+      if (commentRow.userId !== req.user.id) {
+        return res.status(403).json({ error: 'Only the author can edit this comment.' });
+      }
+
+      db.run(
+        'UPDATE ticket_comments SET body = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ? AND ticketId = ?',
+        [body, commentId, id],
+        (updateErr) => {
+          if (updateErr) return res.status(500).json({ error: updateErr.message });
+          db.get(
+            `SELECT tc.*, u.name AS userName, u.initials AS userInitials, u.avatarColor AS userAvatarColor
+             FROM ticket_comments tc
+             LEFT JOIN users u ON tc.userId = u.id
+             WHERE tc.id = ?`,
+            [commentId],
+            (selectErr, updatedComment) => {
+              if (selectErr) return res.status(500).json({ error: selectErr.message });
+              // Emit SSE event for updated comment
+              try {
+                commentEmitter.emit('comment', { type: 'comment-updated', ticketId: Number(id), comment: { ...updatedComment, user: { id: updatedComment.userId, name: updatedComment.userName, initials: updatedComment.userInitials, avatarColor: updatedComment.userAvatarColor } } });
+              } catch (e) {
+                console.warn('SSE emit failed for comment-updated', e.message);
+              }
+
+              res.json({
+                ...updatedComment,
+                user: updatedComment.userId ? {
+                  id: updatedComment.userId,
+                  name: updatedComment.userName,
+                  initials: updatedComment.userInitials,
+                  avatarColor: updatedComment.userAvatarColor,
+                } : null,
+              });
+            }
+          );
+        }
+      );
+    });
+  });
+});
+
+app.delete('/tickets/:id/comments/:commentId', authenticate, authorize('Admin', 'Manager', 'L1', 'L2'), (req, res) => {
+  const { id, commentId } = req.params;
+
+  db.get('SELECT id FROM tickets WHERE id = ?', [id], (ticketErr, ticketRow) => {
+    if (ticketErr) return res.status(500).json({ error: ticketErr.message });
+    if (!ticketRow) return res.status(404).json({ error: 'Ticket not found' });
+
+    db.get('SELECT id, userId FROM ticket_comments WHERE id = ? AND ticketId = ?', [commentId, id], (commentErr, commentRow) => {
+      if (commentErr) return res.status(500).json({ error: commentErr.message });
+      if (!commentRow) return res.status(404).json({ error: 'Comment not found' });
+      if (commentRow.userId !== req.user.id && normalizeRole(req.user.role) !== 'Admin') {
+        return res.status(403).json({ error: 'Only the author or an admin can delete this comment.' });
+      }
+
+      db.run('DELETE FROM ticket_comments WHERE id = ? AND ticketId = ?', [commentId, id], (deleteErr) => {
+        if (deleteErr) return res.status(500).json({ error: deleteErr.message });
+        try {
+          commentEmitter.emit('comment', { type: 'comment-deleted', ticketId: Number(id), commentId: Number(commentId) });
+        } catch (e) {
+          console.warn('SSE emit failed for comment-deleted', e.message);
+        }
+        res.json({ success: true });
+      });
+    });
+  });
 });
 
 app.post('/tickets', authenticate, authorize('Admin', 'Manager'), (req, res) => {
@@ -866,6 +1098,13 @@ app.patch('/tickets/:id/status', authenticate, authorize('Admin', 'Manager', 'L1
             [id],
             (fetchErr, updated) => {
               if (fetchErr) return res.status(500).json({ error: fetchErr.message });
+              // After updating a ticket status, emit a comment event to SSE listeners
+              try {
+                commentEmitter.emit('comment', { type: 'ticket-updated', ticketId: id, updatedAt: new Date().toISOString() });
+              } catch (e) {
+                console.warn('SSE emit failed', e.message);
+              }
+
               res.json({
                 ...updated,
                 assignedTo: updated.assignedToId ? {

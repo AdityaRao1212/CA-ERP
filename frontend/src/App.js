@@ -21,6 +21,8 @@ import {
   InputLabel,
   FormControl,
   Alert,
+  Snackbar,
+  IconButton,
   Chip,
   Stack,
   InputAdornment,
@@ -30,6 +32,10 @@ import SearchIcon from '@mui/icons-material/Search';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import Visibility from '@mui/icons-material/Visibility';
 import VisibilityOff from '@mui/icons-material/VisibilityOff';
+import EditIcon from '@mui/icons-material/Edit';
+import DeleteIcon from '@mui/icons-material/Delete';
+import ReplyIcon from '@mui/icons-material/Reply';
+import CloseIcon from '@mui/icons-material/Close';
 import './App.css';
 import './theme.css';
 import Sidebar from './components/layout/Sidebar';
@@ -82,6 +88,7 @@ const App = () => {
   const [ticketAttachment, setTicketAttachment] = useState(null);
   const [alertMessage, setAlertMessage] = useState('');
   const [alertSeverity, setAlertSeverity] = useState('success');
+  const [notifications, setNotifications] = useState([]);
   const [assigningTicketId, setAssigningTicketId] = useState(null);
   const [pdfDialogOpen, setPdfDialogOpen] = useState(false);
   const [selectedPdfTicket, setSelectedPdfTicket] = useState(null);
@@ -102,6 +109,18 @@ const App = () => {
   const [userDialogError, setUserDialogError] = useState('');
   const [pdfDialogError, setPdfDialogError] = useState('');
   const [userPhoto, setUserPhoto] = useState(null);
+  const [dashboardSearch, setDashboardSearch] = useState('');
+  const [availabilityFilter, setAvailabilityFilter] = useState('All');
+  const [commentsByTicket, setCommentsByTicket] = useState({});
+  const [commentDrafts, setCommentDrafts] = useState({});
+  const [commentLoadingTicketId, setCommentLoadingTicketId] = useState(null);
+  const [commentPostingTicketId, setCommentPostingTicketId] = useState(null);
+  const [commentUpdatingTicketId, setCommentUpdatingTicketId] = useState(null);
+  const [commentDeletingTicketId, setCommentDeletingTicketId] = useState(null);
+  const [activeCommentTicketIds, setActiveCommentTicketIds] = useState([]);
+  const [replyingCommentIdByTicket, setReplyingCommentIdByTicket] = useState({});
+  const [editingCommentIdByTicket, setEditingCommentIdByTicket] = useState({});
+  const [editingCommentDrafts, setEditingCommentDrafts] = useState({});
 
   const canEdit = useMemo(
     () => user && ['Admin', 'Manager'].includes(user.role),
@@ -652,6 +671,359 @@ const App = () => {
     setSelectedAssignee(ticket.assignedTo?.id || '');
   };
 
+  const loadCommentsForTicket = useCallback(async (ticketId, options = {}) => {
+    const { showLoading = false, showError = true } = options;
+    if (showLoading) {
+      setCommentLoadingTicketId(ticketId);
+    }
+
+    try {
+      const response = await fetch(`/tickets/${ticketId}/comments`, { headers: authHeaders });
+      if (!response.ok) throw new Error('Unable to load comments');
+      const comments = await response.json();
+      setCommentsByTicket((prev) => ({ ...prev, [ticketId]: comments }));
+      return comments;
+    } catch (error) {
+      if (showError) {
+        setAlertSeverity('error');
+        setAlertMessage(error.message || 'Unable to load comments');
+      }
+      throw error;
+    } finally {
+      if (showLoading) {
+        setCommentLoadingTicketId(null);
+      }
+    }
+  }, [authHeaders]);
+
+  const toggleComments = async (ticket) => {
+    const isOpen = Boolean(commentsByTicket[ticket.id]);
+    if (isOpen) {
+      setCommentsByTicket((prev) => ({ ...prev, [ticket.id]: null }));
+      setActiveCommentTicketIds((prev) => prev.filter((id) => id !== ticket.id));
+      closeEventSourceForTicket(ticket.id);
+      return;
+    }
+
+    setActiveCommentTicketIds((prev) => (prev.includes(ticket.id) ? prev : [...prev, ticket.id]));
+    try {
+      await loadCommentsForTicket(ticket.id, { showLoading: true });
+      ensureEventSourceForTicket(ticket.id);
+    } catch (error) {
+      setActiveCommentTicketIds((prev) => prev.filter((id) => id !== ticket.id));
+    }
+  };
+
+  useEffect(() => {
+    if (!activeCommentTicketIds.length) return undefined;
+
+    const intervalId = window.setInterval(() => {
+      activeCommentTicketIds.forEach((ticketId) => {
+        loadCommentsForTicket(ticketId, { showError: false });
+      });
+    }, 8000);
+
+    return () => window.clearInterval(intervalId);
+  }, [activeCommentTicketIds, loadCommentsForTicket]);
+
+  const handleCommentChange = (ticketId, value) => {
+    setCommentDrafts((prev) => ({ ...prev, [ticketId]: value }));
+  };
+
+  const handleEditCommentDraftChange = (ticketId, value) => {
+    setEditingCommentDrafts((prev) => ({ ...prev, [ticketId]: value }));
+  };
+
+  const buildCommentTree = (comments = []) => {
+    const nodes = comments.map((comment) => ({ ...comment, replies: [] }));
+    const byId = new Map(nodes.map((comment) => [comment.id, comment]));
+    const roots = [];
+
+    nodes.forEach((comment) => {
+      if (comment.parentId && byId.has(comment.parentId)) {
+        byId.get(comment.parentId).replies.push(comment);
+      } else {
+        roots.push(comment);
+      }
+    });
+
+    return roots;
+  };
+
+  const pushNotification = (message, severity = 'info') => {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    setNotifications((prev) => [...prev, { id, message, severity }]);
+  };
+
+  const removeNotification = (id) => setNotifications((prev) => prev.filter((n) => n.id !== id));
+
+  const commentEventSourcesRef = useRef({});
+
+  const ensureEventSourceForTicket = (ticketId) => {
+    if (!token) return;
+    if (commentEventSourcesRef.current[ticketId]) return;
+    try {
+      const es = new EventSource(`/tickets/${ticketId}/comments/stream?token=${encodeURIComponent(token)}`);
+      const handleEvent = (e) => {
+        try {
+          const payload = JSON.parse(e.data);
+          if (!payload) return;
+          if (payload.type === 'comment-created') {
+            const created = payload.comment;
+            setCommentsByTicket((prev) => {
+              const list = prev[ticketId] ? [...prev[ticketId]] : [];
+              if (!list.find((c) => c.id === created.id)) list.push(created);
+              return { ...prev, [ticketId]: list };
+            });
+            fetchTickets();
+            if (created.user?.id !== user?.id) {
+              pushNotification(`${created.user?.name || 'Someone'} commented.`, 'info');
+            }
+          }
+          if (payload.type === 'comment-updated') {
+            const updated = payload.comment;
+            setCommentsByTicket((prev) => ({
+              ...prev,
+              [ticketId]: (prev[ticketId] || []).map((c) => (c.id === updated.id ? updated : c)),
+            }));
+            if (updated.user?.id !== user?.id) pushNotification(`${updated.user?.name || 'Someone'} edited a comment.`, 'info');
+          }
+          if (payload.type === 'comment-deleted') {
+            const delId = payload.commentId;
+            setCommentsByTicket((prev) => ({
+              ...prev,
+              [ticketId]: (prev[ticketId] || []).filter((c) => c.id !== delId),
+            }));
+            fetchTickets();
+            pushNotification('A comment was deleted.', 'info');
+          }
+          if (payload.type === 'ticket-updated') {
+            fetchTickets();
+            pushNotification('Ticket updated.', 'info');
+          }
+        } catch (err) {
+          console.warn('SSE parse error', err);
+        }
+      };
+      es.onmessage = handleEvent;
+      es.onerror = (err) => {
+        try { es.close(); } catch (e) { }
+        delete commentEventSourcesRef.current[ticketId];
+      };
+      commentEventSourcesRef.current[ticketId] = es;
+    } catch (e) {
+      console.warn('Unable to create EventSource', e);
+    }
+  };
+
+  const closeEventSourceForTicket = (ticketId) => {
+    const es = commentEventSourcesRef.current[ticketId];
+    if (es) {
+      try { es.close(); } catch (e) { }
+      delete commentEventSourcesRef.current[ticketId];
+    }
+  };
+
+  const renderCommentBody = (body = '') => {
+    const parts = String(body).split(/(\s?@[a-zA-Z0-9_.-]+)/g);
+    return parts.filter(Boolean).map((part, index) => {
+      const trimmedPart = part.trim();
+      const isMention = /^@[a-zA-Z0-9_.-]+$/.test(trimmedPart);
+      return isMention ? (
+        <Box key={`${trimmedPart}-${index}`} component="span" sx={{ display: 'inline-flex', alignItems: 'center', fontWeight: 700, color: 'primary.main', bgcolor: 'primary.50', borderRadius: 999, px: 0.75, py: 0.1, mx: 0.25 }}>
+          {trimmedPart}
+        </Box>
+      ) : (
+        <span key={`${trimmedPart}-${index}`}>{part}</span>
+      );
+    });
+  };
+
+  const renderCommentItem = (ticket, comment, depth = 0) => {
+    const isAuthor = comment.user?.id === user?.id;
+    const canModerate = ['Admin', 'Manager'].includes(user?.role);
+    const isEditing = editingCommentIdByTicket[ticket.id] === comment.id;
+    const isReplying = replyingCommentIdByTicket[ticket.id] === comment.id;
+    return (
+      <Box key={comment.id} sx={{ ml: depth * 2, p: 1.25, bgcolor: '#fff', borderRadius: 1, border: '1px solid #e2e8f0' }}>
+        <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1} sx={{ mb: 0.75 }}>
+          <Stack direction="row" alignItems="center" spacing={1} flexWrap="wrap">
+            <AvatarCircle initials={comment.user?.initials} avatarColor={comment.user?.avatarColor} size="sm" />
+            <Typography variant="subtitle2">{comment.user?.name || 'System'}</Typography>
+            <Chip size="small" label="Author" color="primary" variant="outlined" />
+            <Typography variant="caption" color="textSecondary">{new Date(comment.createdAt).toLocaleString()}</Typography>
+            {comment.updatedAt && comment.updatedAt !== comment.createdAt ? (
+              <Typography variant="caption" color="textSecondary">(edited)</Typography>
+            ) : null}
+          </Stack>
+          <Stack direction="row" spacing={0.5}>
+            <Button size="small" startIcon={<ReplyIcon />} onClick={() => startReplying(ticket.id, comment)}>
+              Reply
+            </Button>
+            {(isAuthor || canModerate) && (
+              <>
+                <Button size="small" startIcon={<EditIcon />} onClick={() => startEditingComment(ticket.id, comment)}>
+                  Edit
+                </Button>
+                <Button size="small" color="error" startIcon={<DeleteIcon />} onClick={() => deleteComment(ticket, comment.id)}>
+                  Delete
+                </Button>
+              </>
+            )}
+          </Stack>
+        </Stack>
+        {isEditing ? (
+          <Stack spacing={1}>
+            <TextField
+              fullWidth
+              size="small"
+              multiline
+              minRows={2}
+              value={editingCommentDrafts[ticket.id] || ''}
+              onChange={(event) => handleEditCommentDraftChange(ticket.id, event.target.value)}
+            />
+            <Stack direction="row" spacing={1}>
+              <Button size="small" variant="contained" onClick={() => updateComment(ticket, comment.id)} disabled={commentUpdatingTicketId === ticket.id}>
+                {commentUpdatingTicketId === ticket.id ? 'Saving…' : 'Save'}
+              </Button>
+              <Button size="small" onClick={() => cancelEditingComment(ticket.id)}>Cancel</Button>
+            </Stack>
+          </Stack>
+        ) : (
+          <Typography variant="body2">{renderCommentBody(comment.body)}</Typography>
+        )}
+        {isReplying && !isEditing ? (
+          <Box sx={{ mt: 1.25 }}>
+            <TextField
+              fullWidth
+              size="small"
+              multiline
+              minRows={2}
+              placeholder={`Reply to ${comment.user?.name || 'this thread'}`}
+              value={commentDrafts[ticket.id] || ''}
+              onChange={(event) => handleCommentChange(ticket.id, event.target.value)}
+            />
+            <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
+              <Button size="small" variant="contained" onClick={() => submitComment(ticket)} disabled={commentPostingTicketId === ticket.id}>
+                {commentPostingTicketId === ticket.id ? 'Posting…' : 'Post reply'}
+              </Button>
+              <Button size="small" onClick={() => cancelReplying(ticket.id)}>Cancel</Button>
+            </Stack>
+          </Box>
+        ) : null}
+        {comment.replies?.length ? (
+          <Stack spacing={1.25} sx={{ mt: 1.25 }}>
+            {comment.replies.map((reply) => renderCommentItem(ticket, reply, depth + 1))}
+          </Stack>
+        ) : null}
+      </Box>
+    );
+  };
+
+  const submitComment = async (ticket) => {
+    const content = (commentDrafts[ticket.id] || '').trim();
+    const parentId = replyingCommentIdByTicket[ticket.id] || null;
+    if (!content) return;
+
+    setCommentPostingTicketId(ticket.id);
+    try {
+      const response = await fetch(`/tickets/${ticket.id}/comments`, {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({ content, parentId }),
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Unable to post comment');
+      }
+      await loadCommentsForTicket(ticket.id, { showError: false });
+      setCommentDrafts((prev) => ({ ...prev, [ticket.id]: '' }));
+      setReplyingCommentIdByTicket((prev) => ({ ...prev, [ticket.id]: null }));
+      setAlertSeverity('success');
+      setAlertMessage(parentId ? 'Reply posted.' : 'Comment posted.');
+      fetchTickets();
+    } catch (error) {
+      setAlertSeverity('error');
+      setAlertMessage(error.message || 'Unable to post comment');
+    } finally {
+      setCommentPostingTicketId(null);
+    }
+  };
+
+  const startReplying = (ticketId, comment) => {
+    setReplyingCommentIdByTicket((prev) => ({ ...prev, [ticketId]: comment.id }));
+  };
+
+  const cancelReplying = (ticketId) => {
+    setReplyingCommentIdByTicket((prev) => ({ ...prev, [ticketId]: null }));
+  };
+
+  const startEditingComment = (ticketId, comment) => {
+    setEditingCommentIdByTicket((prev) => ({ ...prev, [ticketId]: comment.id }));
+    setEditingCommentDrafts((prev) => ({ ...prev, [ticketId]: comment.body }));
+  };
+
+  const cancelEditingComment = (ticketId) => {
+    setEditingCommentIdByTicket((prev) => ({ ...prev, [ticketId]: null }));
+    setEditingCommentDrafts((prev) => ({ ...prev, [ticketId]: '' }));
+  };
+
+  const updateComment = async (ticket, commentId) => {
+    const content = (editingCommentDrafts[ticket.id] || '').trim();
+    if (!content) return;
+    const prev = commentsByTicket[ticket.id] ? [...commentsByTicket[ticket.id]] : [];
+    const optimistic = prev.map((c) => (c.id === commentId ? { ...c, body: content, updatedAt: new Date().toISOString() } : c));
+    setCommentsByTicket((p) => ({ ...p, [ticket.id]: optimistic }));
+    cancelEditingComment(ticket.id);
+    setCommentUpdatingTicketId(ticket.id);
+    try {
+      const response = await fetch(`/tickets/${ticket.id}/comments/${commentId}`, {
+        method: 'PATCH',
+        headers: authHeaders,
+        body: JSON.stringify({ content }),
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Unable to update comment');
+      }
+      // refresh to normalize server-side fields
+      await loadCommentsForTicket(ticket.id, { showError: false });
+      pushNotification('Comment updated.', 'success');
+    } catch (error) {
+      // rollback
+      setCommentsByTicket((p) => ({ ...p, [ticket.id]: prev }));
+      pushNotification(error.message || 'Unable to update comment', 'error');
+    } finally {
+      setCommentUpdatingTicketId(null);
+    }
+  };
+
+  const deleteComment = async (ticket, commentId) => {
+    if (!window.confirm('Delete this comment thread?')) return;
+    const prev = commentsByTicket[ticket.id] ? [...commentsByTicket[ticket.id]] : [];
+    const optimistic = prev.filter((c) => c.id !== commentId && c.parentId !== commentId);
+    setCommentsByTicket((p) => ({ ...p, [ticket.id]: optimistic }));
+    setCommentDeletingTicketId(ticket.id);
+    try {
+      const response = await fetch(`/tickets/${ticket.id}/comments/${commentId}`, {
+        method: 'DELETE',
+        headers: authHeaders,
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Unable to delete comment');
+      }
+      pushNotification('Comment deleted.', 'success');
+      fetchTickets();
+    } catch (error) {
+      // rollback
+      setCommentsByTicket((p) => ({ ...p, [ticket.id]: prev }));
+      pushNotification(error.message || 'Unable to delete comment', 'error');
+    } finally {
+      setCommentDeletingTicketId(null);
+    }
+  };
+
   const cancelAssign = () => {
     setAssigningTicketId(null);
     setSelectedAssignee('');
@@ -692,6 +1064,72 @@ const App = () => {
       };
     });
   }, [users, user?.id, user?.role, tickets]);
+
+  const displayedDashboardUsers = useMemo(() => {
+    const term = dashboardSearch.trim().toLowerCase();
+    return dashboardUsers.filter((u) => {
+      if (availabilityFilter === 'Available' && u.assignedCount > 0) return false;
+      if (availabilityFilter === 'Occupied' && u.assignedCount === 0) return false;
+      if (!term) return true;
+      return u.name.toLowerCase().includes(term) || (u.role || '').toLowerCase().includes(term) || (u.department || '').toLowerCase().includes(term);
+    });
+  }, [dashboardUsers, dashboardSearch, availabilityFilter]);
+
+  const handleProfilePhotoUpload = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setAlertSeverity('error');
+      setAlertMessage('Profile photo must be an image file.');
+      event.target.value = '';
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setAlertSeverity('error');
+      setAlertMessage('Profile photo upload is limited to 5 MB.');
+      event.target.value = '';
+      return;
+    }
+    try {
+      const photoData = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error('Unable to read profile photo.'));
+        reader.readAsDataURL(file);
+      });
+
+      const payload = {
+        name: user.name,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+        department: user.department,
+        l2UserId: user.l2UserId || null,
+        photoName: file.name,
+        photoType: file.type,
+        photoData,
+      };
+
+      const response = await fetch(`/users/${user.id}`, {
+        method: 'PUT',
+        headers: authHeaders,
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.error || 'Unable to upload profile photo.');
+      }
+
+      await loadSession(token);
+      setAlertSeverity('success');
+      setAlertMessage('Profile photo updated.');
+    } catch (error) {
+      setAlertSeverity('error');
+      setAlertMessage(error.message || 'Unable to upload profile photo.');
+    } finally {
+      event.target.value = '';
+    }
+  };
 
   const stats = useMemo(() => {
     const byStatus = statuses.reduce((acc, status) => ({ ...acc, [status]: 0 }), {});
@@ -797,13 +1235,30 @@ const App = () => {
           }
           user={user}
           onLogout={handleLogout}
+          onProfilePhotoUpload={handleProfilePhotoUpload}
         />
 
         {alertMessage && (
-          <Alert severity={alertSeverity} onClose={() => setAlertMessage('')} sx={{ mb: 3 }}>
-            {alertMessage}
-          </Alert>
+          <Box sx={{ position: 'fixed', top: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 14000, width: 'min(92%, 760px)' }}>
+            <Alert severity={alertSeverity} onClose={() => setAlertMessage('')}>{alertMessage}</Alert>
+          </Box>
         )}
+
+        {/* Toast notifications (appear above modals) */}
+        {notifications.map((n) => (
+          <Snackbar
+            key={n.id}
+            open
+            anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+            autoHideDuration={5000}
+            onClose={() => removeNotification(n.id)}
+            sx={{ zIndex: 14000 }}
+          >
+            <Alert onClose={() => removeNotification(n.id)} severity={n.severity} sx={{ width: '100%' }}>
+              {n.message}
+            </Alert>
+          </Snackbar>
+        ))}
 
         {activePage === 'Dashboard' ? (
           <>
@@ -845,7 +1300,6 @@ const App = () => {
                 </Paper>
               </Grid>
             </Grid>
-
             <Paper className="projectScopeCard" elevation={0} sx={{ mb: 3 }}>
               <Box>
                 <Typography variant="overline" color="textSecondary">
@@ -859,6 +1313,21 @@ const App = () => {
                 Use the project folder in the left rail to isolate tickets by company.
               </Typography>
             </Paper>
+
+            {/* Dashboard user search & availability filter (Admin / Manager only) */}
+            {canEdit && (
+              <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', mb: 2 }}>
+                <TextField size="small" placeholder="Search people" value={dashboardSearch} onChange={(e) => setDashboardSearch(e.target.value)} sx={{ minWidth: 220 }} />
+                <FormControl size="small" sx={{ minWidth: 160 }}>
+                  <InputLabel>Availability</InputLabel>
+                  <Select value={availabilityFilter} label="Availability" onChange={(e) => setAvailabilityFilter(e.target.value)}>
+                    <MenuItem value="All">All</MenuItem>
+                    <MenuItem value="Available">Available</MenuItem>
+                    <MenuItem value="Occupied">Occupied</MenuItem>
+                  </Select>
+                </FormControl>
+              </Box>
+            )}
 
             <Grid container spacing={3} sx={{ mb: 3 }}>
               <Grid item xs={12} md={6}>
@@ -894,7 +1363,7 @@ const App = () => {
             </Grid>
 
             <Grid container spacing={3} sx={{ mb: 3 }}>
-              {dashboardUsers.map((teamUser) => (
+              {displayedDashboardUsers.map((teamUser) => (
                 <Grid item xs={12} md={4} key={teamUser.id}>
                   <Paper className="statCard" elevation={2}>
                     <Stack direction="row" alignItems="center" spacing={2} sx={{ mb: 2 }}>
@@ -915,7 +1384,7 @@ const App = () => {
                       <Chip
                         label={teamUser.availability}
                         size="small"
-                        color={teamUser.assignedCount > 0 ? 'warning' : 'success'}
+                        color={teamUser.assignedCount > 0 ? 'error' : 'success'}
                       />
                       <Typography variant="body2" sx={{ color: 'textSecondary' }}>
                         {teamUser.assignedCount || 0} active tickets
@@ -946,6 +1415,7 @@ const App = () => {
                     <TableCell>Email</TableCell>
                     <TableCell>Role</TableCell>
                     <TableCell>Department</TableCell>
+                    <TableCell>Availability</TableCell>
                     <TableCell align="right">Active Tickets</TableCell>
                     <TableCell align="right">Actions</TableCell>
                   </TableRow>
@@ -968,6 +1438,9 @@ const App = () => {
                       <TableCell>{profile.email}</TableCell>
                       <TableCell>{profile.role}</TableCell>
                       <TableCell>{profile.department}</TableCell>
+                      <TableCell>
+                        <Chip label={profile.assignedCount > 0 ? 'Occupied' : 'Available'} size="small" color={profile.assignedCount > 0 ? 'error' : 'success'} />
+                      </TableCell>
                       <TableCell align="right">{profile.assignedCount || 0}</TableCell>
                       <TableCell align="right">
                         <Stack direction="row" spacing={1} justifyContent="flex-end">
@@ -1173,66 +1646,107 @@ const App = () => {
                 </TableHead>
                 <TableBody>
                   {filteredTickets.map((ticket) => (
-                    <TableRow key={ticket.id} hover>
-                      <TableCell>{ticket.ticketNumber}</TableCell>
-                      <TableCell>{ticket.title}</TableCell>
-                      <TableCell>{ticket.project || 'Unassigned'}</TableCell>
-                      <TableCell><PriorityBadge priority={ticket.priority} /></TableCell>
-                      <TableCell>
-                        <FormControl size="small" sx={{ minWidth: 140 }}>
-                          <Select value={ticket.status} onChange={(event) => handleStatusChange(ticket.id, event.target.value)}>
-                            {statuses.map((status) => (
-                              <MenuItem key={status} value={status}>{status.replace('_', ' ')}</MenuItem>
-                            ))}
-                          </Select>
-                        </FormControl>
-                      </TableCell>
-                      <TableCell>
-                        {ticket.assignmentPdfData ? (
-                          <Button size="small" variant="text" onClick={() => handleOpenPdfViewer(ticket)}>
-                            View PDF
-                          </Button>
-                        ) : (
-                          <Button size="small" variant="outlined" onClick={() => handleOpenPdfViewer(ticket)}>
-                            Upload PDF
-                          </Button>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        {assigningTicketId === ticket.id ? (
-                          <FormControl fullWidth size="small">
-                            <Select value={selectedAssignee} onChange={(e) => setSelectedAssignee(e.target.value)}>
-                              <MenuItem value="">Unassigned</MenuItem>
-                              {users.map((u) => (
-                                <MenuItem key={u.id} value={u.id}>{u.name}</MenuItem>
+                    <React.Fragment key={ticket.id}>
+                      <TableRow hover>
+                        <TableCell>{ticket.ticketNumber}</TableCell>
+                        <TableCell>
+                          <Box>
+                            <Typography variant="subtitle2">{ticket.title}</Typography>
+                            <Button size="small" variant="text" onClick={() => toggleComments(ticket)} sx={{ px: 0, mt: 0.5 }}>
+                              {commentsByTicket[ticket.id] ? 'Hide conversation' : `Show conversation (${ticket.commentCount || 0})`}
+                            </Button>
+                          </Box>
+                        </TableCell>
+                        <TableCell>{ticket.project || 'Unassigned'}</TableCell>
+                        <TableCell><PriorityBadge priority={ticket.priority} /></TableCell>
+                        <TableCell>
+                          <FormControl size="small" sx={{ minWidth: 140 }}>
+                            <Select value={ticket.status} onChange={(event) => handleStatusChange(ticket.id, event.target.value)}>
+                              {statuses.map((status) => (
+                                <MenuItem key={status} value={status}>{status.replace('_', ' ')}</MenuItem>
                               ))}
                             </Select>
                           </FormControl>
-                        ) : ticket.assignedTo ? (
-                          <Stack direction="row" alignItems="center" spacing={1}>
-                            <AvatarCircle initials={ticket.assignedTo.initials} avatarColor={ticket.assignedTo.avatarColor} size="sm" />
-                            <Typography variant="body2">{ticket.assignedTo.name}</Typography>
-                          </Stack>
-                        ) : (
-                          <Chip label="Unassigned" size="small" />
-                        )}
-                      </TableCell>
-                      <TableCell>{ticket.dueDate ? new Date(ticket.dueDate).toLocaleDateString() : 'TBD'}</TableCell>
-                      <TableCell align="right">
-                        {assigningTicketId === ticket.id ? (
-                          <Stack direction="row" spacing={1} justifyContent="flex-end">
-                            <Button size="small" onClick={cancelAssign}>Cancel</Button>
-                            <Button variant="contained" size="small" onClick={() => handleAssign(ticket.id, selectedAssignee)}>
-                              Save
+                        </TableCell>
+                        <TableCell>
+                          {ticket.assignmentPdfData ? (
+                            <Button size="small" variant="text" onClick={() => handleOpenPdfViewer(ticket)}>
+                              View PDF
                             </Button>
-                          </Stack>
-                        ) : (
-                          <Button size="small" variant="outlined" onClick={() => startAssign(ticket)}>
-                            {ticket.assignedTo ? 'Reassign' : 'Assign'}
-                          </Button>
-                        )}
-                      </TableCell>
-                    </TableRow>
+                          ) : (
+                            <Button size="small" variant="outlined" onClick={() => handleOpenPdfViewer(ticket)}>
+                              Upload PDF
+                            </Button>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {assigningTicketId === ticket.id ? (
+                            <FormControl fullWidth size="small">
+                              <Select value={selectedAssignee} onChange={(e) => setSelectedAssignee(e.target.value)}>
+                                <MenuItem value="">Unassigned</MenuItem>
+                                {users.map((u) => (
+                                  <MenuItem key={u.id} value={u.id}>{u.name}</MenuItem>
+                                ))}
+                              </Select>
+                            </FormControl>
+                          ) : ticket.assignedTo ? (
+                            <Stack direction="row" alignItems="center" spacing={1}>
+                              <AvatarCircle initials={ticket.assignedTo.initials} avatarColor={ticket.assignedTo.avatarColor} size="sm" />
+                              <Typography variant="body2">{ticket.assignedTo.name}</Typography>
+                            </Stack>
+                          ) : (
+                            <Chip label="Unassigned" size="small" />
+                          )}
+                        </TableCell>
+                        <TableCell>{ticket.dueDate ? new Date(ticket.dueDate).toLocaleDateString() : 'TBD'}</TableCell>
+                        <TableCell align="right">
+                          {assigningTicketId === ticket.id ? (
+                            <Stack direction="row" spacing={1} justifyContent="flex-end">
+                              <Button size="small" onClick={cancelAssign}>Cancel</Button>
+                              <Button variant="contained" size="small" onClick={() => handleAssign(ticket.id, selectedAssignee)}>
+                                Save
+                              </Button>
+                            </Stack>
+                          ) : (
+                            <Button size="small" variant="outlined" onClick={() => startAssign(ticket)}>
+                              {ticket.assignedTo ? 'Reassign' : 'Assign'}
+                            </Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                      {commentsByTicket[ticket.id] && (
+                        <TableRow>
+                          <TableCell colSpan={9}>
+                            <Box sx={{ p: 2, borderTop: '1px solid #e2e8f0', bgcolor: '#f8fafc', borderRadius: 1 }}>
+                              <Typography variant="subtitle2" sx={{ mb: 1 }}>Ticket conversation</Typography>
+                              {commentLoadingTicketId === ticket.id ? (
+                                <Typography variant="body2" color="textSecondary">Loading conversation…</Typography>
+                              ) : (commentsByTicket[ticket.id] || []).length === 0 ? (
+                                <Typography variant="body2" color="textSecondary">No comments yet. Start the discussion.</Typography>
+                              ) : (
+                                <Stack spacing={1.25} sx={{ mb: 1.5 }}>
+                                  {buildCommentTree(commentsByTicket[ticket.id] || []).map((comment) => renderCommentItem(ticket, comment))}
+                                </Stack>
+                              )}
+                              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 1.5 }}>
+                                <TextField
+                                  fullWidth
+                                  size="small"
+                                  multiline
+                                  minRows={2}
+                                  placeholder="Write a message for the ticket"
+                                  value={commentDrafts[ticket.id] || ''}
+                                  onChange={(event) => handleCommentChange(ticket.id, event.target.value)}
+                                />
+                                <Button variant="contained" size="small" onClick={() => submitComment(ticket)} disabled={commentPostingTicketId === ticket.id}>
+                                  {commentPostingTicketId === ticket.id ? 'Posting…' : 'Post'}
+                                </Button>
+                              </Stack>
+                            </Box>
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </React.Fragment>
                   ))}
                   {filteredTickets.length === 0 && (
                     <TableRow>

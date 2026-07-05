@@ -216,6 +216,26 @@ body {
     box-shadow: var(--card-shadow)
 }
 
+/* Global notification shown above dialogs */
+.notificationBar {
+    position: fixed;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 2000;
+    width: min(92%, 760px);
+}
+
+/* small visual hint for uploadable avatars */
+.avatarUploadHint {
+    position: absolute;
+    right: -2px;
+    bottom: -2px;
+    background: rgba(0, 0, 0, 0.45);
+    border-radius: 999px;
+    padding: 4px;
+}
+
 /* Badges */
 .severity-badge {
     display: inline-flex;
@@ -319,6 +339,7 @@ body {
 }
 
 @media (max-width: 680px) {
+
     .topBar,
     .projectScopeCard {
         flex-direction: column;
