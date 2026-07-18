@@ -719,7 +719,7 @@ const App = () => {
 
     const intervalId = window.setInterval(() => {
       activeCommentTicketIds.forEach((ticketId) => {
-        loadCommentsForTicket(ticketId, { showError: false });
+        void loadCommentsForTicket(ticketId, { showError: false }).catch(() => { });
       });
     }, 8000);
 
