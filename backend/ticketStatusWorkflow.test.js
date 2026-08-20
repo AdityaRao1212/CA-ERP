@@ -35,6 +35,7 @@ test('L2 completion finalizes only when client mail is confirmed', () => {
         currentStatus: 'PENDING',
         assignedRole: 'L2',
         l2UserId: 77,
+        currentAssigneeId: 55,
         requestedStatus: 'DONE',
         mailSentToClient: true,
     });
@@ -42,11 +43,13 @@ test('L2 completion finalizes only when client mail is confirmed', () => {
         currentStatus: 'PENDING',
         assignedRole: 'L2',
         l2UserId: 77,
+        currentAssigneeId: 55,
         requestedStatus: 'DONE',
         mailSentToClient: false,
     });
 
     assert.equal(confirmed.nextStatus, 'DONE');
+    assert.equal(Object.prototype.hasOwnProperty.call(confirmed, 'assignedToId'), false);
     assert.equal(declined.nextStatus, 'PENDING');
-    assert.equal(declined.assignedToId, 77);
+    assert.equal(declined.assignedToId, 55);
 });

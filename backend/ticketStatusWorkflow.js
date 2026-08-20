@@ -12,6 +12,7 @@ function resolveTicketStatusTransition({
     currentStatus,
     assignedRole,
     l2UserId,
+    currentAssigneeId,
     requestedStatus,
     mailSentToClient,
 }) {
@@ -21,7 +22,6 @@ function resolveTicketStatusTransition({
     if (nextStatus !== 'DONE') {
         return {
             nextStatus,
-            // do not set assignedToId here — undefined means "no change" to assignee
             requiresClientMailConfirmation: false,
         };
     }
@@ -36,18 +36,22 @@ function resolveTicketStatusTransition({
 
     if (assignedRoleNormalized === 'L2') {
         const confirmed = mailSentToClient === true;
+        if (confirmed) {
+            return {
+                nextStatus: 'DONE',
+                requiresClientMailConfirmation: true,
+            };
+        }
+
         return {
-            nextStatus: confirmed ? 'DONE' : 'PENDING',
-            // if confirmed, leave assignee unchanged (undefined => no change);
-            // if not confirmed, keep assigned to the L2 reviewer
-            assignedToId: confirmed ? undefined : (l2UserId ?? null),
+            nextStatus: 'PENDING',
+            assignedToId: currentAssigneeId ?? null,
             requiresClientMailConfirmation: true,
         };
     }
 
     return {
         nextStatus: 'DONE',
-        // explicit no-change to assignee
         requiresClientMailConfirmation: false,
     };
 }

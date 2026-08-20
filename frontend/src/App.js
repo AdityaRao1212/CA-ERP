@@ -590,13 +590,15 @@ const App = () => {
     if (nextStatus === 'DONE' && user?.role === 'L2') {
       const confirmMail = window.confirm('Mail sent to Client?');
       if (!confirmMail) {
-        finalStatus = 'PENDING';
+        setAlertSeverity('info');
+        setAlertMessage('Ticket kept pending. No mail was sent to the client yet.');
+        return;
       }
     }
 
     try {
       const payload = { status: finalStatus };
-      if (finalStatus === 'DONE' && user?.role === 'L2') {
+      if (nextStatus === 'DONE' && user?.role === 'L2' && finalStatus === 'DONE') {
         payload.mailSentToClient = true;
       }
 
@@ -613,12 +615,12 @@ const App = () => {
       setTickets((prevTickets) => prevTickets.map((ticket) =>
         ticket.id === updatedTicket.id
           ? {
-              ...ticket,
-              ...updatedTicket,
-              status: updatedTicket.status,
-              assignedTo: updatedTicket.assignedTo ?? ticket.assignedTo,
-              createdBy: updatedTicket.createdBy ?? ticket.createdBy,
-            }
+            ...ticket,
+            ...updatedTicket,
+            status: updatedTicket.status,
+            assignedTo: updatedTicket.assignedTo ?? ticket.assignedTo,
+            createdBy: updatedTicket.createdBy ?? ticket.createdBy,
+          }
           : ticket
       ));
       setAlertSeverity('success');

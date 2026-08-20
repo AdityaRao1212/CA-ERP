@@ -1067,23 +1067,23 @@ app.patch('/tickets/:id/status', authenticate, authorize('Admin', 'Manager', 'L1
         currentStatus: ticket.status,
         assignedRole,
         l2UserId: ticket.l2UserId,
+        currentAssigneeId: ticket.assignedToId,
         requestedStatus: status,
         mailSentToClient: mailSentToClient === true || mailSentToClient === 'true',
       });
 
       const finalStatus = transition.nextStatus;
-      const assignmentChangeRequested = Object.prototype.hasOwnProperty.call(transition, 'assignedToId');
+      const assignmentChangeRequested = Object.prototype.hasOwnProperty.call(transition, 'assignedToId') && transition.assignedToId !== undefined;
       const nextAssignee = assignmentChangeRequested ? transition.assignedToId : ticket.assignedToId;
 
       const isStatusChange = ticket.status !== finalStatus;
-      // Build update fields dynamically: only include assignedToId when change requested
       const updateFields = [
         'status = ?',
         'updatedAt = CURRENT_TIMESTAMP',
       ];
       const updateParams = [finalStatus];
-      if (assignmentChangeRequested) {
-        // explicit assignment change (can be null to unassign)
+
+      if (assignmentChangeRequested && transition.assignedToId !== undefined) {
         updateFields.splice(1, 0, 'assignedToId = ?');
         updateParams.push(nextAssignee);
       }
