@@ -45,7 +45,7 @@ import PriorityBadge from './components/shared/PriorityBadge';
 
 const categories = ['BUG', 'FEATURE', 'SECURITY', 'COMPLIANCE', 'OPERATIONS', 'INFRASTRUCTURE'];
 const priorities = ['URGENT', 'HIGH', 'MEDIUM', 'LOW'];
-const statuses = ['TODO', 'IN_PROGRESS', 'IN_REVIEW', 'DONE', 'CANCELLED'];
+const statuses = ['TODO', 'IN_PROGRESS', 'IN_REVIEW', 'PENDING', 'DONE', 'CANCELLED'];
 const projectNames = ['HDFC', 'ICICI', 'SBI', 'Axis'];
 const projectFilters = ['All Projects', ...projectNames];
 const roleOptions = ['Admin', 'Manager', 'L1', 'L2'];
@@ -572,7 +572,7 @@ const App = () => {
       setSelectedAssignee('');
       setAlertSeverity('success');
       setAlertMessage('Ticket assignment updated successfully.');
-      fetchTickets();
+      await Promise.all([fetchTickets(), fetchUsers()]);
     } catch (error) {
       setAlertSeverity('error');
       setAlertMessage(error.message || 'Unable to update ticket assignment.');
@@ -580,19 +580,57 @@ const App = () => {
   };
 
   const handleStatusChange = async (ticketId, nextStatus) => {
+    const currentTicket = tickets.find((ticket) => ticket.id === ticketId);
+    let finalStatus = nextStatus;
+
+    if (nextStatus === 'DONE' && user?.role === 'L1') {
+      finalStatus = 'PENDING';
+    }
+
+    if (nextStatus === 'DONE' && user?.role === 'L2') {
+      const confirmMail = window.confirm('Mail sent to Client?');
+      if (!confirmMail) {
+        finalStatus = 'PENDING';
+      }
+    }
+
     try {
+      const payload = { status: finalStatus };
+      if (finalStatus === 'DONE' && user?.role === 'L2') {
+        payload.mailSentToClient = true;
+      }
+
       const response = await fetch(`/tickets/${ticketId}/status`, {
         method: 'PATCH',
         headers: authHeaders,
-        body: JSON.stringify({ status: nextStatus }),
+        body: JSON.stringify(payload),
       });
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || 'Unable to update status.');
       }
+      const updatedTicket = await response.json();
+      setTickets((prevTickets) => prevTickets.map((ticket) =>
+        ticket.id === updatedTicket.id
+          ? {
+              ...ticket,
+              ...updatedTicket,
+              status: updatedTicket.status,
+              assignedTo: updatedTicket.assignedTo ?? ticket.assignedTo,
+              createdBy: updatedTicket.createdBy ?? ticket.createdBy,
+            }
+          : ticket
+      ));
       setAlertSeverity('success');
-      setAlertMessage('Ticket status updated successfully.');
-      fetchTickets();
+      setAlertMessage(
+        updatedTicket.status === 'PENDING'
+          ? 'Ticket sent for review and kept pending.'
+          : 'Ticket status updated successfully.'
+      );
+      await Promise.all([fetchTickets(), fetchUsers()]);
+      if (currentTicket?.status !== updatedTicket.status) {
+        setAlertMessage(`Ticket status updated successfully. Last change: ${new Date(updatedTicket.updatedAt).toLocaleString()}`);
+      }
     } catch (error) {
       setAlertSeverity('error');
       setAlertMessage(error.message || 'Unable to update ticket status.');
@@ -1138,14 +1176,14 @@ const App = () => {
     scopedTickets.forEach((ticket) => {
       byStatus[ticket.status] += 1;
       byPriority[ticket.priority] += 1;
-      if (ticket.dueDate && ticket.status !== 'DONE' && ticket.status !== 'CANCELLED') {
+      if (ticket.dueDate && ticket.status !== 'DONE' && ticket.status !== 'CANCELLED' && ticket.status !== 'PENDING') {
         const due = new Date(ticket.dueDate);
         if (due < new Date()) overdue += 1;
       }
     });
     return {
       total: scopedTickets.length,
-      open: scopedTickets.filter((ticket) => ['TODO', 'IN_PROGRESS', 'IN_REVIEW'].includes(ticket.status)).length,
+      open: scopedTickets.filter((ticket) => ['TODO', 'IN_PROGRESS', 'IN_REVIEW', 'PENDING'].includes(ticket.status)).length,
       overdue,
       done: byStatus.DONE,
       byStatus,

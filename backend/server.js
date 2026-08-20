@@ -2,6 +2,7 @@ const express = require('express');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const crypto = require('crypto');
+const { resolveTicketStatusTransition } = require('./ticketStatusWorkflow');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -1046,7 +1047,7 @@ app.patch('/tickets/:id/assign', authenticate, authorize('Admin', 'Manager', 'L1
 
 app.patch('/tickets/:id/status', authenticate, authorize('Admin', 'Manager', 'L1', 'L2'), (req, res) => {
   const { id } = req.params;
-  const { status } = req.body;
+  const { status, mailSentToClient } = req.body;
   if (!status) {
     return res.status(400).json({ error: 'Status is required' });
   }
@@ -1062,13 +1063,56 @@ app.patch('/tickets/:id/status', authenticate, authorize('Admin', 'Manager', 'L1
       if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
 
       const assignedRole = normalizeRole(ticket.assignedRole);
-      const fallbackAssignee = status === 'DONE' && assignedRole === 'L1' && ticket.l2UserId ? ticket.l2UserId : ticket.assignedToId;
+      const transition = resolveTicketStatusTransition({
+        currentStatus: ticket.status,
+        assignedRole,
+        l2UserId: ticket.l2UserId,
+        requestedStatus: status,
+        mailSentToClient: mailSentToClient === true || mailSentToClient === 'true',
+      });
+
+      const finalStatus = transition.nextStatus;
+      const assignmentChangeRequested = Object.prototype.hasOwnProperty.call(transition, 'assignedToId');
+      const nextAssignee = assignmentChangeRequested ? transition.assignedToId : ticket.assignedToId;
+
+      const isStatusChange = ticket.status !== finalStatus;
+      // Build update fields dynamically: only include assignedToId when change requested
+      const updateFields = [
+        'status = ?',
+        'updatedAt = CURRENT_TIMESTAMP',
+      ];
+      const updateParams = [finalStatus];
+      if (assignmentChangeRequested) {
+        // explicit assignment change (can be null to unassign)
+        updateFields.splice(1, 0, 'assignedToId = ?');
+        updateParams.push(nextAssignee);
+      }
+
+      if (finalStatus === 'DONE' && ticket.status !== 'DONE') {
+        updateFields.push('resolvedAt = CURRENT_TIMESTAMP');
+      } else if (finalStatus !== 'DONE' && ticket.status === 'DONE') {
+        updateFields.push('resolvedAt = NULL');
+      }
+
+      if (ticket.status === 'TODO' && finalStatus !== 'TODO') {
+        updateFields.push('startedAt = CURRENT_TIMESTAMP');
+      }
+
+      const sql = `UPDATE tickets SET ${updateFields.join(', ')} WHERE id = ?`;
+      const params = [...updateParams, id];
 
       db.run(
-        'UPDATE tickets SET status = ?, assignedToId = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
-        [status, fallbackAssignee, id],
+        sql,
+        params,
         function (updateErr) {
           if (updateErr) return res.status(500).json({ error: updateErr.message });
+
+          if (isStatusChange) {
+            db.run(
+              'INSERT INTO audit_logs (ticketId, userId, action, fromValue, toValue, message, createdAt) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
+              [id, req.user.id, 'status_changed', ticket.status, finalStatus, `${req.user.name || req.user.username} updated the ticket status from ${ticket.status} to ${finalStatus}`]
+            );
+          }
 
           const notify = (targetId, type, title, message) => {
             if (!targetId) return;
@@ -1078,9 +1122,10 @@ app.patch('/tickets/:id/status', authenticate, authorize('Admin', 'Manager', 'L1
             );
           };
 
-          if (status === 'DONE' && fallbackAssignee && fallbackAssignee !== ticket.assignedToId) {
+          const assignmentChanged = assignmentChangeRequested && nextAssignee !== ticket.assignedToId;
+          if (finalStatus === 'PENDING' && assignmentChanged) {
             notify(
-              fallbackAssignee,
+              nextAssignee,
               'REVIEW_REQUIRED',
               `${ticket.ticketNumber} moved for review`,
               `${req.user.name || req.user.username} completed ${ticket.ticketNumber} and routed it to the next reviewer.`
@@ -1098,7 +1143,6 @@ app.patch('/tickets/:id/status', authenticate, authorize('Admin', 'Manager', 'L1
             [id],
             (fetchErr, updated) => {
               if (fetchErr) return res.status(500).json({ error: fetchErr.message });
-              // After updating a ticket status, emit a comment event to SSE listeners
               try {
                 commentEmitter.emit('comment', { type: 'ticket-updated', ticketId: id, updatedAt: new Date().toISOString() });
               } catch (e) {
@@ -1107,6 +1151,7 @@ app.patch('/tickets/:id/status', authenticate, authorize('Admin', 'Manager', 'L1
 
               res.json({
                 ...updated,
+                updatedAt: updated.updatedAt,
                 assignedTo: updated.assignedToId ? {
                   id: updated.assignedToId,
                   name: updated.assignedToName,
